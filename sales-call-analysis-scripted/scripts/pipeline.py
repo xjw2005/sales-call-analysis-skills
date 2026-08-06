@@ -1393,6 +1393,18 @@ def validate_schema(base: str, table: str, profile: dict[str, Any]) -> dict[str,
         or not {"是", "否"}.issubset(cooperation_options)
     ):
         raise RuntimeError(f"字段{cooperation_field}必须是包含是/否的单选字段")
+    valid_field = profile.get("valid_field")
+    if valid_field:
+        valid = fields.get(valid_field)
+        if valid is None:
+            raise RuntimeError(f"Base缺少字段: {valid_field}")
+        valid_options = [x["name"] for x in valid.get("options", [])]
+        if (
+            valid.get("type") != "select"
+            or valid.get("multiple")
+            or not {"有效", "无效"}.issubset(valid_options)
+        ):
+            raise RuntimeError(f"字段{valid_field}必须是包含有效/无效的单选字段")
     concern = fields["关心类目打标"]
     options = [x["name"] for x in concern.get("options", [])]
     if concern.get("type") != "select" or not concern.get("multiple"):
@@ -1415,6 +1427,7 @@ def fetch_records(
         profile.get("cooperation_field", "是否达成合作"),
         *profile.get("identity_fields", []),
         profile.get("notes_field", ""),
+        profile.get("valid_field", ""),
     ]
     for values in MODULE_FIELDS.values():
         names.extend(values)
@@ -1736,6 +1749,7 @@ def main() -> int:
             profile["source_field"]: text,
             profile.get("cooperation_field", "是否达成合作"): "",
             profile.get("notes_field", ""): "",
+            profile.get("valid_field", ""): "",
             **{field: "" for field in profile.get("identity_fields", [])},
         }]
     else:
@@ -1765,7 +1779,7 @@ def main() -> int:
         rescue_map = rescue_targets(rescue_path)
 
     tasks = []
-    skipped_blank = skipped_complete = partial = 0
+    skipped_blank = skipped_complete = skipped_invalid = partial = 0
     for row in rows:
         rid = row.get("_record_id")
         if record_ids and rid not in record_ids:
@@ -1773,6 +1787,11 @@ def main() -> int:
         transcript_text = cell_text(row.get(profile["source_field"])).strip()
         if not transcript_text:
             skipped_blank += 1
+            continue
+        valid_field = profile.get("valid_field")
+        if valid_field and cell_text(row.get(valid_field)) == "无效":
+            skipped_invalid += 1
+            logger.emit("skip_invalid", {"record_id": rid})
             continue
         requested = []
         for module in modules:
@@ -1803,7 +1822,7 @@ def main() -> int:
     print(
         f"[init] records={len(rows)} record_tasks={len(tasks)} "
         f"module_jobs={len(module_jobs)} workers={args.workers} blank={skipped_blank} "
-        f"complete_modules={skipped_complete} partial_modules={partial}",
+        f"invalid={skipped_invalid} complete_modules={skipped_complete} partial_modules={partial}",
         flush=True,
     )
     if args.preflight:

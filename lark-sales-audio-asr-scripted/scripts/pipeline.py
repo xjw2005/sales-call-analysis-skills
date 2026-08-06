@@ -207,6 +207,12 @@ def validate_schema(profile: dict[str, Any]) -> None:
         raise RuntimeError(f"{profile['attachment_field']} 必须是附件字段")
     if fields[profile["transcript_field"]].get("type") != "text":
         raise RuntimeError(f"{profile['transcript_field']} 必须是文本字段")
+    valid_field = profile.get("valid_field")
+    if valid_field:
+        if valid_field not in fields:
+            raise RuntimeError(f"飞书缺少字段: {valid_field}")
+        if fields[valid_field].get("type") != "select":
+            raise RuntimeError(f"{valid_field} 必须是单选字段")
 
 
 def fetch_rows(
@@ -260,9 +266,9 @@ def pending_rows(
         if not isinstance(attachments, list) or not attachments:
             stats["no_audio"] += 1
             continue
-        if len(attachments) != 1:
+        if len(attachments) > 1:
+            # 多附件：全部转写后合并成一份完整对话（见 merge_asr_segments）
             stats["multiple_audio"] += 1
-            continue
         if not overwrite and not is_blank(row.get(profile["transcript_field"])):
             stats["already_written"] += 1
             continue
@@ -288,34 +294,42 @@ def download_attachment(
     row: dict[str, Any],
     record_dir: Path,
 ) -> dict[str, Any]:
-    item = row[profile["attachment_field"]][0]
-    original_name = safe_name(str(item.get("name") or "audio.bin"))
-    name = local_audio_name(original_name)
-    path = record_dir / name
     record_dir.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        lark(
-            "base", "+record-download-attachment",
-            "--base-token", profile["base_token"],
-            "--table-id", profile["table_id"],
-            "--record-id", row["_record_id"],
-            "--file-token", str(item["file_token"]),
-            "--output", name,
-            "--overwrite",
-            cwd=record_dir,
-        )
-    if not path.exists() or path.stat().st_size <= 0:
-        raise RuntimeError("附件下载后文件不存在或为空")
-    duration = media_duration(path)
-    return {
+    attachments = row[profile["attachment_field"]]
+    audio_files: list[dict[str, Any]] = []
+    for index, item in enumerate(attachments):
+        original_name = safe_name(str(item.get("name") or "audio.bin"))
+        name = local_audio_name(original_name)
+        if len(attachments) > 1:
+            name = f"audio-{index + 1}{Path(name).suffix}"
+        path = record_dir / name
+        if not path.exists():
+            lark(
+                "base", "+record-download-attachment",
+                "--base-token", profile["base_token"],
+                "--table-id", profile["table_id"],
+                "--record-id", row["_record_id"],
+                "--file-token", str(item["file_token"]),
+                "--output", name,
+                "--overwrite",
+                cwd=record_dir,
+            )
+        if not path.exists() or path.stat().st_size <= 0:
+            raise RuntimeError(f"附件 {original_name} 下载后文件不存在或为空")
+        duration = media_duration(path)
+        audio_files.append({
+            "attachment_name": original_name,
+            "file_token": str(item["file_token"]),
+            "audio_path": str(path.resolve()),
+            "audio_format": path.suffix.lower().lstrip("."),
+            "audio_bytes": path.stat().st_size,
+            "duration_seconds": round(duration, 3),
+            "task_id": None,
+        })
+    first = audio_files[0]
+    result: dict[str, Any] = {
         "record_id": row["_record_id"],
         "status": "prepared",
-        "attachment_name": original_name,
-        "file_token": item["file_token"],
-        "audio_path": str(path.resolve()),
-        "audio_format": path.suffix.lower().lstrip("."),
-        "audio_bytes": path.stat().st_size,
-        "duration_seconds": round(duration, 3),
         "identity": {
             field: row.get(field)
             for field in profile.get("identity_fields", [])
@@ -324,7 +338,20 @@ def download_attachment(
         "error": None,
         "task_id": None,
         "created_at": now(),
+        # 单附件兼容旧字段；多附件统一走 audio_files
+        "attachment_name": first["attachment_name"],
+        "file_token": first["file_token"],
+        "audio_path": first["audio_path"],
+        "audio_format": first["audio_format"],
+        "audio_bytes": first["audio_bytes"],
+        "duration_seconds": round(
+            sum(float(f["duration_seconds"]) for f in audio_files), 3
+        ),
+        "audio_files": audio_files,
     }
+    if len(audio_files) == 1:
+        result.pop("audio_files")
+    return result
 
 
 def wav_duration(path: Path) -> float:
@@ -563,55 +590,80 @@ def deep_find(value: Any, key: str) -> Any:
 
 
 def submit_one(cfg: dict[str, Any], record: dict[str, Any], record_dir: Path) -> dict[str, Any]:
-    if record.get("task_id"):
+    files = record.get("audio_files") or [{
+        "audio_path": record["audio_path"],
+        "audio_format": record["audio_format"],
+        "attachment_name": record.get("attachment_name", "audio"),
+    }]
+    if record.get("task_id") and len(files) == 1:
         return {"status": record["status"], "task_id": record["task_id"]}
-    upload = las_command(cfg, "file-upload", record["audio_path"])
-    url = deep_find(upload, "presigned_url")
-    if not isinstance(url, str) or not url.startswith("http"):
-        raise RuntimeError("上传成功但没有 presigned_url")
-    audio = {
-        "url": url,
-        "format": record["audio_format"],
-    }
-    asr_language = str(cfg.get("asr_language", "auto"))
-    if asr_language != "auto":
-        audio["language"] = asr_language
-    payload = {
-        "audio": audio,
-        "request": {
-            "model_name": "bigmodel",
-            "enable_itn": True,
-            "enable_punc": True,
-            "enable_ddc": False,
-            "enable_speaker_info": True,
-            "show_utterances": True,
-            "show_speech_rate": True,
-            "show_volume": True,
-            "enable_lid": True,
-            "enable_emotion_detection": True,
-            "enable_gender_detection": True,
-            "enable_denoise": True,
-        },
-    }
-    archived_payload = json.loads(json.dumps(payload, ensure_ascii=False))
-    archived_payload["audio"]["url"] = "<ephemeral-presigned-url-redacted>"
-    atomic_json(record_dir / "request.json", archived_payload)
-    try:
-        response = las_command(
-            cfg,
-            "submit",
-            "--version", str(cfg["operator_version"]),
-            str(cfg["operator_id"]),
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-        )
-    except Exception as exc:
-        raise SubmitUncertain(str(exc)) from exc
-    atomic_json(record_dir / "submit.json", response)
-    task_id = deep_find(response, "task_id")
-    status = str(deep_find(response, "task_status") or "PENDING").upper()
-    if not task_id:
-        raise RuntimeError("Submit 未返回 Task ID")
-    return {"task_id": str(task_id), "status": status.lower(), "submitted_at": now()}
+    tasks: list[dict[str, Any]] = []
+    for index, audio_file in enumerate(files):
+        if audio_file.get("task_id"):
+            tasks.append({
+                "attachment_name": audio_file["attachment_name"],
+                "task_id": audio_file["task_id"],
+                "status": "submitted",
+                "submitted_at": audio_file.get("submitted_at", now()),
+            })
+            continue
+        upload = las_command(cfg, "file-upload", audio_file["audio_path"])
+        url = deep_find(upload, "presigned_url")
+        if not isinstance(url, str) or not url.startswith("http"):
+            raise RuntimeError(f"附件 {audio_file['attachment_name']} 上传成功但没有 presigned_url")
+        audio = {
+            "url": url,
+            "format": audio_file["audio_format"],
+        }
+        asr_language = str(cfg.get("asr_language", "auto"))
+        if asr_language != "auto":
+            audio["language"] = asr_language
+        payload = {
+            "audio": audio,
+            "request": {
+                "model_name": "bigmodel",
+                "enable_itn": True,
+                "enable_punc": True,
+                "enable_ddc": False,
+                "enable_speaker_info": True,
+                "show_utterances": True,
+                "show_speech_rate": True,
+                "show_volume": True,
+                "enable_lid": True,
+                "enable_emotion_detection": True,
+                "enable_gender_detection": True,
+                "enable_denoise": True,
+            },
+        }
+        archived_payload = json.loads(json.dumps(payload, ensure_ascii=False))
+        archived_payload["audio"]["url"] = "<ephemeral-presigned-url-redacted>"
+        request_path = record_dir / "request.json" if len(files) == 1 else record_dir / f"request-{index + 1}.json"
+        atomic_json(request_path, archived_payload)
+        try:
+            response = las_command(
+                cfg,
+                "submit",
+                "--version", str(cfg["operator_version"]),
+                str(cfg["operator_id"]),
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            )
+        except Exception as exc:
+            raise SubmitUncertain(str(exc)) from exc
+        submit_path = record_dir / "submit.json" if len(files) == 1 else record_dir / f"submit-{index + 1}.json"
+        atomic_json(submit_path, response)
+        task_id = deep_find(response, "task_id")
+        status = str(deep_find(response, "task_status") or "PENDING").upper()
+        if not task_id:
+            raise RuntimeError("Submit 未返回 Task ID")
+        tasks.append({
+            "attachment_name": audio_file["attachment_name"],
+            "task_id": str(task_id),
+            "status": status.lower(),
+            "submitted_at": now(),
+        })
+    if len(files) == 1:
+        return {"task_id": tasks[0]["task_id"], "status": tasks[0]["status"], "submitted_at": tasks[0]["submitted_at"]}
+    return {"tasks": tasks, "status": "submitted"}
 
 
 def submit_run(cfg: dict[str, Any], run_dir: Path, confirm: str, workers: int) -> dict[str, Any]:
@@ -806,6 +858,64 @@ def collect_speakers(payload: dict[str, Any]) -> list[str]:
         speakers.add(speaker_of(item))
         speakers.update(match.group(1) for match in INLINE_SPEAKER.finditer(str(item.get("text") or "")))
     return sorted(speakers, key=lambda value: (not value.isdigit(), int(value) if value.isdigit() else value))
+
+
+def time_of(item: dict[str, Any], start: bool) -> int:
+    keys = ("start_time", "start_ms") if start else ("end_time", "end_ms")
+    for key in keys:
+        if item.get(key) is not None:
+            return int(item[key])
+    return 0
+
+
+def set_speaker(item: dict[str, Any], value: str) -> None:
+    additions = item.get("additions")
+    if isinstance(additions, dict) and additions.get("speaker") is not None:
+        additions["speaker"] = value
+        return
+    for key in ("speaker_id", "speaker", "spk"):
+        if item.get(key) is not None:
+            item[key] = value
+            return
+    item["speaker"] = value
+
+
+def shift_time(item: dict[str, Any], offset_ms: int) -> None:
+    for key in ("start_time", "end_time", "start_ms", "end_ms"):
+        if item.get(key) is not None:
+            item[key] = int(item[key]) + offset_ms
+
+
+def renumber_speaker(segment_index: int, speaker: str) -> str:
+    """多段录音的 speaker ID 各自独立：段 n 的 speaker s 重编号为 n*100+s，
+    避免不同段的同一 ID 被角色层当成同一人。"""
+    try:
+        return str(segment_index * 100 + int(speaker))
+    except (TypeError, ValueError):
+        return f"{segment_index}_{speaker}"
+
+
+def merge_result_files(record_dir: Path, result_paths: list[Path]) -> Path:
+    """多附件合并：按附件顺序拼接 utterances，speaker 重编号 + 时间轴整体偏移。"""
+    merged_utterances: list[dict[str, Any]] = []
+    offset_ms = 0
+    for index, path in enumerate(result_paths, 1):
+        payload = load_json(path)
+        utterances = utterances_from(payload)
+        segment_end = 0
+        for item in utterances:
+            new_item = copy.deepcopy(item)
+            set_speaker(new_item, renumber_speaker(index, speaker_of(item)))
+            shift_time(new_item, offset_ms)
+            segment_end = max(segment_end, time_of(item, False))
+            merged_utterances.append(new_item)
+        offset_ms += segment_end
+    merged: dict[str, Any] = {"data": {"result": {"utterances": merged_utterances}}}
+    container = result_container(merged)
+    container["text"] = "".join(str(item.get("text") or "") for item in merged_utterances)
+    output = record_dir / "result-merged.json"
+    atomic_json(output, merged)
+    return output
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
@@ -1195,18 +1305,19 @@ def label_roles(
     return validate_transcript(transcript_path), source, current_audit.get("summary", {})
 
 
-def read_record_field(profile: dict[str, Any], record_id: str) -> Any:
+def read_record_field(profile: dict[str, Any], record_id: str, field: str | None = None) -> Any:
+    field = field or profile["transcript_field"]
     data = lark(
         "base", "+record-get",
         "--base-token", profile["base_token"],
         "--table-id", profile["table_id"],
         "--record-id", record_id,
-        "--field-id", profile["transcript_field"],
+        "--field-id", field,
     )
     rows = rows_of(data)
     if len(rows) != 1:
         raise RuntimeError("飞书复读未返回唯一记录")
-    return rows[0].get(profile["transcript_field"])
+    return rows[0].get(field)
 
 
 def write_transcript(profile: dict[str, Any], record_id: str, text: str, overwrite: bool) -> None:
@@ -1231,39 +1342,103 @@ def write_transcript(profile: dict[str, Any], record_id: str, text: str, overwri
     raise RuntimeError("飞书写后复读与本地文本不一致")
 
 
+def judge_validity(profile: dict[str, Any], labeled: str) -> str:
+    """按角色转写统计自动初判有效性。
+
+    无效 = 转写后没有实质性内容（提取不了信息、无参考价值）：正文总字符数
+    不足 valid_min_chars（默认 100）或客户发言行数不足 valid_min_customer_lines
+    （默认 2）。阈值可在 profile 配置。
+    """
+    min_chars = int(profile.get("valid_min_chars", 100))
+    min_customer_lines = int(profile.get("valid_min_customer_lines", 2))
+    chars = 0
+    customer_lines = 0
+    for line in labeled.splitlines():
+        match = LINE_RE.match(line)
+        if not match:
+            continue
+        chars += len(re.sub(r"\s", "", match.group("text")))
+        if match.group("role") == "客户":
+            customer_lines += 1
+    if chars < min_chars or customer_lines < min_customer_lines:
+        return "无效"
+    return "有效"
+
+
+def write_validity(profile: dict[str, Any], record_id: str, labeled: str) -> None:
+    """写回「是否有效对话」：仅在字段为空时写入，不覆盖人工复核过的值。"""
+    field = profile.get("valid_field")
+    if not field:
+        return
+    current = read_record_field(profile, record_id, field)
+    if not is_blank(current):
+        return
+    value = judge_validity(profile, labeled)
+    data = lark(
+        "base", "+record-upsert",
+        "--base-token", profile["base_token"],
+        "--table-id", profile["table_id"],
+        "--record-id", record_id,
+        "--json", json.dumps({field: value}, ensure_ascii=False),
+    )
+    if not data.get("updated"):
+        raise RuntimeError("飞书没有确认更新有效性")
+    for attempt in range(3):
+        if not is_blank(read_record_field(profile, record_id, field)):
+            return
+        time.sleep(attempt + 1)
+    raise RuntimeError("飞书写后复读有效性为空")
+
+
 def process_completed(
     cfg: dict[str, Any],
     run_dir: Path,
     record: dict[str, Any],
-    response: dict[str, Any],
+    response: dict[str, Any] | None = None,
+    result_paths: list[Path] | None = None,
 ) -> dict[str, Any]:
     rid = record["record_id"]
     record_dir = run_dir / "records" / rid
-    result_path = record_dir / "result.json"
-    atomic_json(result_path, response)
-    code = str(deep_find(response, "business_code") or "")
-    text = deep_find(response, "text")
-    utterances = utterances_from(response)
-    if code not in {"0", ""} or not isinstance(text, str) or not text.strip() or not utterances:
-        raise RuntimeError(f"COMPLETED 结果验收失败: business_code={code}, utterances={len(utterances)}")
-    role_input_path = result_path
+    if result_paths is None:
+        result_path = record_dir / "result.json"
+        atomic_json(result_path, response)
+        result_paths = [result_path]
+    for path in result_paths:
+        payload = load_json(path)
+        code = str(deep_find(payload, "business_code") or "")
+        text = deep_find(payload, "text")
+        utterances = utterances_from(payload)
+        if code not in {"0", ""} or not isinstance(text, str) or not text.strip() or not utterances:
+            raise RuntimeError(
+                f"COMPLETED 结果验收失败: {path.name} business_code={code}, "
+                f"utterances={len(utterances)}"
+            )
+    role_input_path = result_paths[0]
+    merged = len(result_paths) > 1
+    if merged:
+        role_input_path = merge_result_files(record_dir, result_paths)
     if (
         cfg.get("asr_language") in {"auto", "cant", "yue-CN"}
         and cfg.get("output_language") == "zh-CN"
     ):
-        role_input_path = normalize_dialect_to_mandarin(cfg, response, record_dir)
+        role_input_path = normalize_dialect_to_mandarin(
+            cfg, load_json(role_input_path), record_dir
+        )
     labeled, source, role_audit = label_roles(cfg, record_dir, role_input_path)
     result = {
         "status": "role_labeled",
         "completed_at": now(),
         "asr_language": cfg.get("asr_language", "zh"),
         "output_language": cfg.get("output_language", "source"),
+        "merged_segments": len(result_paths),
         "normalized_result_path": (
-            str(role_input_path.resolve()) if role_input_path != result_path else None
+            str(role_input_path.resolve())
+            if role_input_path != (record_dir / "result.json")
+            else None
         ),
         "role_map_source": source,
         "role_audit": role_audit,
-        "utterance_count": len(utterances),
+        "utterance_count": len(utterances_from(load_json(role_input_path))),
         "transcript_path": str((record_dir / "labeled-transcript.txt").resolve()),
         "error": None,
     }
@@ -1297,54 +1472,88 @@ def poll_run(cfg: dict[str, Any], run_dir: Path, workers: int, dry_run: bool) ->
             append_event(run_dir, {"record_id": record["record_id"], "status": record["status"]})
             save_state(run_dir, state)
 
+    def record_task_list(record: dict[str, Any]) -> list[tuple[int, str]]:
+        """返回 [(附件序号, task_id)]：多附件按 tasks 列表，单附件用顶层 task_id。"""
+        tasks = record.get("tasks")
+        if tasks:
+            return [(index + 1, str(task["task_id"])) for index, task in enumerate(tasks)]
+        return [(1, str(record["task_id"]))]
+
     candidates = [
         record for record in state["records"].values()
-        if record.get("task_id")
+        if (record.get("task_id") or record.get("tasks"))
         and record.get("status") not in TERMINAL | {"role_labeled", "write_error"}
     ]
 
-    def job(record: dict[str, Any]) -> tuple[str, dict[str, Any] | None, dict[str, Any]]:
+    def job(record: dict[str, Any]) -> tuple[str, dict[int, dict[str, Any] | None], dict[int, dict[str, Any]]]:
         rid = record["record_id"]
-        try:
-            response = poll_one(run_cfg, record["task_id"])
-            status = str(deep_find(response, "task_status") or "UNKNOWN").upper()
-            result = {
-                "status": status.lower(),
-                "last_polled_at": now(),
-                "business_code": str(deep_find(response, "business_code") or ""),
-                "error": deep_find(response, "error_msg"),
-            }
-            return rid, response, result
-        except Exception as exc:
-            return rid, None, {"status": record.get("status", "submitted"), "poll_error": str(exc)}
+        responses: dict[int, dict[str, Any] | None] = {}
+        results: dict[int, dict[str, Any]] = {}
+        for segment_index, task_id in record_task_list(record):
+            try:
+                response = poll_one(run_cfg, task_id)
+                status = str(deep_find(response, "task_status") or "UNKNOWN").upper()
+                results[segment_index] = {
+                    "status": status.lower(),
+                    "last_polled_at": now(),
+                    "business_code": str(deep_find(response, "business_code") or ""),
+                    "error": deep_find(response, "error_msg"),
+                }
+                responses[segment_index] = response
+            except Exception as exc:
+                results[segment_index] = {
+                    "status": record.get("status", "submitted"),
+                    "poll_error": str(exc),
+                }
+        return rid, responses, results
 
-    polled: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
+    polled: list[tuple[str, dict[int, dict[str, Any] | None], dict[int, dict[str, Any]]]] = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         futures = [pool.submit(job, record) for record in candidates]
         for future in as_completed(futures):
             polled.append(future.result())
 
-    completed = [(rid, response) for rid, response, result in polled if response is not None and result.get("status") == "completed"]
+    # 每条记录的全部附件都完成后才做角色识别/合并
+    completed_ids: set[str] = set()
+    for rid, responses, results in polled:
+        if responses and all(
+            result.get("status") == "completed" for result in results.values()
+        ):
+            completed_ids.add(rid)
     completed_results: dict[str, dict[str, Any]] = {}
 
-    def role_job(rid: str, response: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    def role_job(rid: str, responses: dict[int, dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+        record = state["records"][rid]
+        record_dir = run_dir / "records" / rid
         try:
-            return rid, process_completed(run_cfg, run_dir, state["records"][rid], response)
+            task_list = record_task_list(record)
+            if len(task_list) == 1:
+                return rid, process_completed(
+                    run_cfg, run_dir, record, responses[task_list[0][0]]
+                )
+            result_paths: list[Path] = []
+            for segment_index, _ in task_list:
+                path = record_dir / f"result-{segment_index}.json"
+                atomic_json(path, responses[segment_index])
+                result_paths.append(path)
+            return rid, process_completed(run_cfg, run_dir, record, result_paths=result_paths)
         except Exception as exc:
             return rid, {"status": "role_error", "error": str(exc), "last_polled_at": now()}
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = [pool.submit(role_job, rid, response) for rid, response in completed]
+        futures = [pool.submit(role_job, rid, responses) for rid, responses in [
+            (rid, responses) for rid, responses, _ in polled if rid in completed_ids
+        ]]
         for future in as_completed(futures):
             rid, result = future.result()
             completed_results[rid] = result
 
     # 写同一张飞书表的动作只在此循环发生，因此始终串行。
-    for rid, response, poll_result in polled:
+    for rid, responses, poll_results in polled:
         record = state["records"][rid]
-        status = poll_result.get("status")
-        result = completed_results.get(rid, poll_result)
-        if status in {"failed", "timeout"}:
+        statuses = [result.get("status") for result in poll_results.values()]
+        result = completed_results.get(rid, dict(poll_results.get(1, {})))
+        if any(status in {"failed", "timeout"} for status in statuses):
             result["status"] = "asr_failed"
         elif result.get("status") == "role_labeled" and not dry_run:
             try:
@@ -1355,7 +1564,13 @@ def poll_run(cfg: dict[str, Any], run_dir: Path, workers: int, dry_run: bool) ->
             except Exception as exc:
                 result.update({"status": "write_error", "error": str(exc)})
             else:
+                try:
+                    write_validity(state["profile"], rid, labeled)
+                except Exception as exc:
+                    result["validity_error"] = str(exc)
                 result.update({"status": "written", "error": None, "written_at": now()})
+        elif result.get("status") == "role_labeled":
+            result["status"] = "role_labeled"
         record.update(result)
         append_event(run_dir, {"record_id": rid, **result})
     save_state(run_dir, state)

@@ -334,6 +334,54 @@ def main() -> int:
         assert "role-preview" in str(preview_dir)
         assert (preview_dir / "role-audit.json").exists()
 
+    # ---- 多附件合并 ----
+    assert pipeline.renumber_speaker(2, "1") == "201"
+    assert pipeline.renumber_speaker(1, "abc") == "1_abc"
+    item = {"additions": {"speaker": "1"}, "start_ms": 500, "end_ms": 2000}
+    pipeline.shift_time(item, 30000)
+    assert item["start_ms"] == 30500 and item["end_ms"] == 32000
+    pipeline.set_speaker(item, "101")
+    assert item["additions"]["speaker"] == "101"
+    assert pipeline.time_of({"start_time": 1000, "start_ms": 999}, True) == 1000
+    assert pipeline.time_of({"end_ms": 42}, False) == 42
+
+    seg1 = root / "result-1.json"
+    seg2 = root / "result-2.json"
+    pipeline.atomic_json(seg1, {
+        "data": {"result": {"text": "你好", "utterances": [
+            {"additions": {"speaker": "1"}, "start_ms": 0, "end_ms": 1000, "text": "你好"},
+            {"additions": {"speaker": "2"}, "start_ms": 1000, "end_ms": 3000, "text": "您好"},
+        ]}},
+    })
+    pipeline.atomic_json(seg2, {
+        "data": {"result": {"text": "再见", "utterances": [
+            {"additions": {"speaker": "1"}, "start_ms": 0, "end_ms": 2000, "text": "再见"},
+        ]}},
+    })
+    merged_path = pipeline.merge_result_files(root, [seg1, seg2])
+    merged_items = pipeline.utterances_from(pipeline.load_json(merged_path))
+    assert [str(item["additions"]["speaker"]) for item in merged_items] == ["101", "102", "201"]
+    assert [item["start_ms"] for item in merged_items] == [0, 1000, 3000]
+    assert [item["end_ms"] for item in merged_items] == [1000, 3000, 5000]
+    assert pipeline.result_container(pipeline.load_json(merged_path))["text"] == "你好您好再见"
+
+    # ---- 是否有效对话自动初判 ----
+    short = (
+        "[00:00:00.000–00:00:00.500] 客户：嗯\n"
+        "[00:00:00.500–00:00:01.000] 销售：好\n"
+    )
+    assert pipeline.judge_validity({}, short) == "无效"
+    long_enough = "".join(
+        f"[00:00:{index:02d}.000–00:00:{index + 1:02d}.000] 客户：今天进货的事情我们商量一下{index}\n"
+        for index in range(10)
+    )
+    assert pipeline.judge_validity({}, long_enough) == "有效"
+    no_customer = "".join(
+        f"[00:00:{index:02d}.000–00:00:{index + 1:02d}.000] 销售：介绍产品{index}\n"
+        for index in range(20)
+    )
+    assert pipeline.judge_validity({}, no_customer) == "无效"
+
     print("self_test: OK")
     return 0
 
