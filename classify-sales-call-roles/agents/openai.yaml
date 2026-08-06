@@ -1,0 +1,4 @@
+interface:
+  display_name: "销售通话角色识别"
+  short_description: "识别销售、客户与旁人，并修复长录音 speaker 身份漂移"
+  default_prompt: "Use $classify-sales-call-roles to label sales-call speakers and repair time-segment role drift."

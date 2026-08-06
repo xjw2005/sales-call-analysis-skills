@@ -1,0 +1,36 @@
+{
+  "llm_config_path": "C:\\Users\\12909\\.agents\\skills\\ai-answer-analysis-scripted\\config.local.json",
+  "model": "deepseek-v4-pro",
+  "knowledge_root": "C:\\EngineeringProjects\\Obsidian_repo\\Obsidian_repo\\AI电话语音识别分析\\knowledge",
+  "knowledge_enabled": true,
+  "knowledge_mode": "manifest",
+  "default_profile": "default",
+  "profiles": {
+    "default": {
+      "base": "ZnXbbkJIMaiv2tsOChlcvgb0nHe",
+      "table": "tblw59gaVcbBChsK",
+      "default_view": "vewPvX8Q4c",
+      "source_field": "完整对话-文字",
+      "cooperation_field": "是否达成合作",
+      "identity_fields": ["门店编号", "门店名称", "门店联系人"]
+    },
+    "visit_v2": {
+      "base": "Bwy4bUfNuaAhYCshVPQcKfp7nPb",
+      "table": "tblrHkMYtFerhOm2",
+      "default_view": "vewIf60qAA",
+      "source_field": "完整对话-文字",
+      "cooperation_field": "是否达成合作",
+      "notes_field": "现场速记",
+      "identity_fields": ["拜访ID", "门店编号", "门店名称"]
+    },
+    "visit_prod": {
+      "base": "GoKJbQJhnak3nCs82Jnciuv3nNb",
+      "table": "tblx9Hjo1mxrBMiw",
+      "default_view": "vewIf60qAA",
+      "source_field": "完整对话-文字",
+      "cooperation_field": "是否达成合作",
+      "notes_field": "现场速记",
+      "identity_fields": ["拜访编号", "门店编号", "门店名称"]
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "asr_provider": "volc_las",
+  "lasutil_path": "C:\\Users\\12909\\.codex\\skills\\lark-sales-audio-asr-scripted\\.venv\\Scripts\\lasutil.exe",
+  "operator_id": "las_asr_seed-2-0-lite",
+  "operator_version": "v1",
+  "region": "cn-beijing",
+  "rate_yuan_per_hour": 1.6,
+  "tencent_flash": {
+    "app_id": "1380371902",
+    "engine_type": "16k_zh-PY",
+    "rate_yuan_per_hour": 3.1,
+    "max_concurrency": 5,
+    "timeout_seconds": 300,
+    "normalize_audio": true,
+    "speaker_diarization": 1,
+    "require_two_speakers": false,
+    "filter_dirty": 0,
+    "filter_modal": 0,
+    "filter_punc": 0,
+    "convert_num_mode": 1,
+    "word_info": 0,
+    "first_channel_only": 1,
+    "hotword_weight": 10
+  },
+  "role_llm_config_path": "C:\\Users\\12909\\.codex\\skills\\sales-call-analysis-scripted\\config.local.json",
+  "hotwords": ["小安素", "全安素", "亲舒"],
+  "profiles": {
+    "default": {
+      "base_token": "ZnXbbkJIMaiv2tsOChlcvgb0nHe",
+      "table_id": "tblw59gaVcbBChsK",
+      "view_id": "vewPvX8Q4c",
+      "attachment_field": "录音文件",
+      "transcript_field": "完整对话-文字",
+      "identity_fields": ["门店编号", "门店名称", "门店联系人"]
+    },
+    "visit_v2": {
+      "base_token": "Bwy4bUfNuaAhYCshVPQcKfp7nPb",
+      "table_id": "tblrHkMYtFerhOm2",
+      "view_id": "vewIf60qAA",
+      "attachment_field": "录音文件",
+      "transcript_field": "完整对话-文字",
+      "identity_fields": ["拜访ID", "门店编号", "门店名称"]
+    },
+    "visit_prod": {
+      "base_token": "GoKJbQJhnak3nCs82Jnciuv3nNb",
+      "table_id": "tblx9Hjo1mxrBMiw",
+      "view_id": "vewIf60qAA",
+      "attachment_field": "录音文件",
+      "transcript_field": "完整对话-文字",
+      "identity_fields": ["拜访编号", "门店编号", "门店名称"]
+    }
+  }
+}

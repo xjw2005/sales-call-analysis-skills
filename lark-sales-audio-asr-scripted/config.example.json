@@ -1,0 +1,37 @@
+{
+  "asr_provider": "tencent_flash",
+  "lasutil_path": "",
+  "operator_id": "las_asr_seed-2-0-lite",
+  "operator_version": "v1",
+  "region": "cn-beijing",
+  "rate_yuan_per_hour": 1.6,
+  "tencent_flash": {
+    "app_id": "",
+    "engine_type": "16k_zh-PY",
+    "rate_yuan_per_hour": 3.1,
+    "max_concurrency": 5,
+    "timeout_seconds": 300,
+    "normalize_audio": true,
+    "speaker_diarization": 1,
+    "require_two_speakers": false,
+    "filter_dirty": 0,
+    "filter_modal": 0,
+    "filter_punc": 0,
+    "convert_num_mode": 1,
+    "word_info": 0,
+    "first_channel_only": 1,
+    "hotword_weight": 10
+  },
+  "role_llm_config_path": "",
+  "hotwords": ["小安素", "全安素", "亲舒"],
+  "profiles": {
+    "default": {
+      "base_token": "",
+      "table_id": "",
+      "view_id": "",
+      "attachment_field": "录音文件",
+      "transcript_field": "完整对话-文字",
+      "identity_fields": ["门店编号", "门店名称", "门店联系人"]
+    }
+  }
+}

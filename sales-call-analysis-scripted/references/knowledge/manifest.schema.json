@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://localhost/sales-call/knowledge-manifest.schema.json",
+  "title": "知识库注入清单",
+  "type": "object",
+  "required": ["version", "modules"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "updated": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "modules": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/moduleSpec" }
+    }
+  },
+  "definitions": {
+    "moduleSpec": {
+      "type": "object",
+      "required": ["max_tokens", "selection"],
+      "properties": {
+        "instruction": { "type": "string" },
+        "max_tokens": { "type": "integer", "minimum": 1 },
+        "selection": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "$ref": "#/definitions/fileSel" },
+              { "$ref": "#/definitions/entrySel" },
+              { "$ref": "#/definitions/querySel" }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "fileSel": {
+      "type": "object",
+      "required": ["type", "path"],
+      "properties": {
+        "type": { "enum": ["file"] },
+        "path": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "entrySel": {
+      "type": "object",
+      "required": ["type", "file", "id"],
+      "properties": {
+        "type": { "enum": ["entry"] },
+        "file": { "type": "string" },
+        "id": { "type": "string", "pattern": "^[a-z0-9]+-[a-z0-9]+-\\d{3}$" }
+      },
+      "additionalProperties": false
+    },
+    "querySel": {
+      "type": "object",
+      "required": ["type", "facets"],
+      "properties": {
+        "type": { "enum": ["query"] },
+        "facets": {
+          "type": "object",
+          "properties": {
+            "tags": { "type": "array", "items": { "type": "string" } },
+            "status": { "enum": ["active", "deprecated", "archived", "superseded"] }
+          },
+          "additionalProperties": false
+        },
+        "limit": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "$schema": "./manifest.schema.json",
+  "version": 1,
+  "updated": "2026-08-03",
+  "modules": {
+    "store-profile": {
+      "instruction": "知识只用于理解客户表述与归类（识别门店品类/品牌/经营模式），禁止据此补写录音未提及的门店事实；所有档案内容仍需客户证据。",
+      "max_tokens": 1200,
+      "selection": []
+    },
+    "implicit-needs": {
+      "instruction": "知识只用于生成合理的假设方向；每条隐性需求/顾虑仍需录音内客户证据支撑，不得据知识条目补写。",
+      "max_tokens": 1000,
+      "selection": []
+    },
+    "explicit-needs": {
+      "max_tokens": 400,
+      "selection": []
+    },
+    "concerns": {
+      "max_tokens": 400,
+      "selection": []
+    },
+    "effectiveness": {
+      "max_tokens": 400,
+      "selection": []
+    },
+    "quotes": {
+      "max_tokens": 400,
+      "selection": []
+    },
+    "next-action": {
+      "max_tokens": 400,
+      "selection": []
+    }
+  }
+}

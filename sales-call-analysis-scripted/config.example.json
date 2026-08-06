@@ -1,0 +1,19 @@
+{
+  "api_url": "https://example.com/v1",
+  "api_key": "",
+  "model": "deepseek-v4-pro",
+  "knowledge_root": "",
+  "knowledge_enabled": true,
+  "knowledge_mode": "manifest",
+  "default_profile": "default",
+  "profiles": {
+    "default": {
+      "base": "base_token",
+      "table": "table_id",
+      "default_view": "view_id",
+      "source_field": "完整对话-文字",
+      "notes_field": "现场速记",
+      "identity_fields": ["门店编号", "门店名称", "门店联系人"]
+    }
+  }
+}

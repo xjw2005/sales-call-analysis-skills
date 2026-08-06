@@ -1,0 +1,4 @@
+interface:
+  display_name: "飞书销售录音批量转写"
+  short_description: "批量异步转写飞书销售录音并标注销售、客户、旁人"
+  default_prompt: "使用 $lark-sales-audio-asr-scripted 先只读预检，再下载估价；获得本批次费用确认后异步提交 LAS，保存 Task ID，短轮询完成任务，并把带时间戳和销售/客户/旁人标签的完整对话串行写回飞书。"
