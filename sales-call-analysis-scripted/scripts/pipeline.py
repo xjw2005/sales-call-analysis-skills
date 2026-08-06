@@ -1467,6 +1467,11 @@ def field_values_equal(field: str, actual: Any, expected: Any) -> bool:
             return sorted(str(item) for item in actual_items) == sorted(
                 str(item) for item in expected_items
             )
+    if field == "是否达成合作":
+        # select 单选：lark-cli 复读返回选项名数组（如 ["是"]），期望值是选项名
+        if isinstance(actual, list) and isinstance(expected, str):
+            return [str(item) for item in actual] == [expected]
+        return actual == expected
     return actual == expected
 
 

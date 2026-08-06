@@ -412,7 +412,7 @@ def media_duration(path: Path) -> float:
         from mutagen import File as mutagen_file
     except ImportError:
         mutagen_file = None
-    if mutagen_file is not None and suffix in {".wav", ".wave", ".m4a", ".mp4", ".mov", ".aac", ".mp3"}:
+    if mutagen_file is not None and suffix in {".wav", ".wave", ".m4a", ".mp4", ".mov", ".aac", ".mp3", ".ogg"}:
         media = mutagen_file(path)
         value = float(media.info.length) if media is not None and getattr(media, "info", None) else 0.0
     elif suffix in {".wav", ".wave"}:

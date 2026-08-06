@@ -194,6 +194,11 @@ def main():
         ["价格敏感", "利润空间"],
     )
     assert not p.field_values_equal("关心类目打标", ["价格敏感"], [])
+    # select 单选：lark-cli 复读返回选项名数组，期望值是选项名
+    assert p.field_values_equal("是否达成合作", ["是"], "是")
+    assert p.field_values_equal("是否达成合作", ["否"], "否")
+    assert not p.field_values_equal("是否达成合作", ["否"], "是")
+    assert not p.field_values_equal("是否达成合作", "是", "否")
 
     tr = p.parse_transcript(TEXT)
     value = candidate()
