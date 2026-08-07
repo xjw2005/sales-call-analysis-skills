@@ -43,7 +43,7 @@ MODULE_FIELDS = {
     "concerns": ["关心类目打标", "场景化类目归因"],
     "effectiveness": ["合作进展打分评估", "原句参考_合作进展打分评估"],
     "quotes": ["核心金句"],
-    "store-profile": ["门店档案"],
+    "store-profile": ["门店档案", "门店档案-原文证据"],
     "next-action": ["下一步行动策略", "是否达成合作"],
 }
 ALL_MODULES = list(MODULE_FIELDS)
@@ -70,6 +70,14 @@ PROFILE_SECTIONS = {
     "price_profit": "利润偏好",
     "cooperation_preferences": "合作偏好与排斥项",
 }
+# 与 store-profile-split 的 SECTION_LABELS 保持一致（self_test 断言）
+PROFILE_ONE_LINE_LABEL = "一句话画像"
+PROFILE_STATE_TYPES = "稳定档案|当前状态|未确认"
+PROFILE_ONE_LINE_RE = re.compile(r"(?m)^一句话画像：(.+)$")
+PROFILE_SECTION_RE = re.compile(
+    r"(?m)^(" + "|".join(re.escape(label) for label in PROFILE_SECTIONS.values())
+    + r")（(?:" + PROFILE_STATE_TYPES + r")）：(.*)$"
+)
 ROLES = {"销售", "客户", "旁人"}
 FORBIDDEN_NEEDS = ("建议验证问题", "待验证点")
 INSUFFICIENT_MARKERS = ("不完整", "缺段", "截断", "严重乱码", "无法确认", "无法区分", "ASR损坏")
@@ -670,7 +678,8 @@ def validate_store_profile(value: Any, tr: Transcript, ctx: EvidenceContext, err
     if str(value["one_line"]).startswith("未确认"):
         if value["one_line_evidence_ids"]:
             errors.append("门店一句话画像未确认时证据必须为空")
-    else:
+    elif value["one_line_evidence_ids"]:
+        # 非未确认且有本次证据 → 正常校验；无证据 = 历史档案保留画像（动态更新），放行
         validate_ids(value["one_line_evidence_ids"], tr, ctx, errors, "门店一句话画像", role="客户")
         validate_named_facts(value["one_line"], value["one_line_evidence_ids"], "门店一句话画像")
     sections = value["sections"]
@@ -690,9 +699,12 @@ def validate_store_profile(value: Any, tr: Transcript, ctx: EvidenceContext, err
         if item["state_type"] == "未确认":
             if item["evidence_ids"]:
                 errors.append(f"{label}未确认时证据必须为空")
-        else:
+        elif item["evidence_ids"]:
             validate_ids(item["evidence_ids"], tr, ctx, errors, label, role="客户")
             validate_named_facts(item["content"], item["evidence_ids"], label)
+        elif item["state_type"] != "稳定档案":
+            # 仅「稳定档案」允许无本次证据（历史档案保留项，动态更新）；当前状态必须本次证据
+            errors.append(f"{label}需要至少1个本次发言ID作为证据")
 
 
 def validate_next_action(
@@ -983,12 +995,124 @@ def render_quotes(value: dict[str, Any], tr: Transcript, ctx: EvidenceContext) -
     return {"核心金句": "\n\n".join(blocks) or "未识别到证据充分且可复用的销售金句。"}
 
 
+def master_record_id_of(row: dict[str, Any], profile: dict[str, Any]) -> str | None:
+    """从 02 表行取「关联门店」link 指向的 01 主档记录 ID。"""
+    value = row.get(profile.get("master_link_field", ""))
+    if isinstance(value, list) and value:
+        return str(value[0])
+    return None
+
+
+def parse_profile_text(text: str) -> dict[str, str]:
+    """拆解门店档案正文为 7 维度（与 store-profile-split.parse_profile 口径一致）。"""
+    dims: dict[str, str] = {}
+    m = PROFILE_ONE_LINE_RE.search(text)
+    if m:
+        dims["one_line"] = m.group(1).strip()
+    label_to_key = {label: key for key, label in PROFILE_SECTIONS.items()}
+    seen: set[str] = set()
+    for m in PROFILE_SECTION_RE.finditer(text):
+        key = label_to_key[m.group(1)]
+        if key in seen:
+            continue  # 同一维度多行（异常）时取第一行
+        seen.add(key)
+        dims[key] = m.group(2).strip()
+    for key in list(PROFILE_SECTIONS) + ["one_line"]:
+        dims.setdefault(key, "")
+    return dims
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, (int, float)):
+        ts = value if value < 10**11 else value / 1000  # 秒 vs 毫秒
+        try:
+            return datetime.fromtimestamp(ts)
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = str(value).strip()[:19].replace("T", " ")
+    try:
+        return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def within_history_days(value: Any, days: int) -> bool:
+    """进店时间是否在 days 天内（含当天）；解析失败保守视为在范围内。"""
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return True
+    return (datetime.now() - parsed).days <= days
+
+
+def find_history_profile(
+    profile: dict[str, Any], master_rid: str, exclude_rid: str,
+) -> tuple[str, str] | None:
+    """02 表查该门店前 history_days 天内、进店时间最近且档案非空的一条。
+
+    返回 (进店时间原文, 门店档案正文)；无则 None。只读「门店档案」精简正文，
+    不读「门店档案-原文证据」（省 token）。
+    """
+    filter_json = json.dumps(
+        {
+            "logic": "and",
+            "conditions": [[profile["master_link_field"], "intersects", [master_rid]]],
+        },
+        ensure_ascii=False,
+    )
+    sort_json = json.dumps(
+        [{"field": profile["master_date_field"], "desc": True}], ensure_ascii=False
+    )
+    profile_field = MODULE_FIELDS["store-profile"][0]
+    days = int(profile.get("master_history_days", 3))
+    data = lark(
+        "base", "+record-list", "--base-token", profile["base"], "--table-id", profile["table"],
+        "--filter-json", filter_json, "--sort-json", sort_json,
+        "--field-id", profile["master_date_field"], "--field-id", profile_field,
+        "--limit", "200",
+    )
+    for row in rows_of(data):
+        if row["_record_id"] == exclude_rid:
+            continue
+        text = cell_text(row.get(profile_field)).strip()
+        if not text:
+            continue
+        date_value = row.get(profile["master_date_field"])
+        if date_value and not within_history_days(date_value, days):
+            return None  # 最近一条已超 3 天，更早的不再看
+        return cell_text(date_value), text
+    return None
+
+
+def sync_master_profile(
+    profile: dict[str, Any], row: dict[str, Any], profile_text: str,
+) -> dict[str, Any]:
+    """把门店档案正文拆成 7 维度，全量覆盖写 01 门店主档表（用户已授权覆盖）。
+
+    写回沿用 update_record 的逐字段 upsert + 复读模式；失败抛错由调用方记 warning，
+    不阻断 02 表分析结果。
+    """
+    master_rid = master_record_id_of(row, profile)
+    if not master_rid:
+        raise RuntimeError("02 表未关联 01 门店主档（关联门店为空）")
+    dims = parse_profile_text(profile_text)
+    patch: dict[str, str] = {}
+    for field, dim_key in profile.get("master_fields", {}).items():
+        value = dims.get(dim_key, "").strip()
+        if value:
+            patch[field] = value
+    if not patch:
+        raise RuntimeError("门店档案正文解析不出任何维度，未写 01 主档")
+    update_record(profile["base"], profile["master_table"], master_rid, patch)
+    return {"master_record_id": master_rid, "fields": sorted(patch)}
+
+
 def render_store_profile(
     value: dict[str, Any],
     tr: Transcript,
     ctx: EvidenceContext,
     identity: dict[str, str],
     record_id: str,
+    history_date: str = "",
 ) -> dict[str, Any]:
     lines = [f"一句话画像：{value['one_line']}"]
     all_ids = list(value["one_line_evidence_ids"])
@@ -996,24 +1120,30 @@ def render_store_profile(
         item = value["sections"][key]
         lines.append(f"{label}（{item['state_type']}）：{item['content']}")
         all_ids.extend(item["evidence_ids"])
+    source = "；".join(
+        f"{key}={value}" for key, value in identity.items() if value
+    )
+    lines.append(
+        f"档案口径：动态更新档案；来源：record_id={record_id}"
+        + (f"；参考历史进店时间：{history_date}" if history_date else "")
+        + (f"；{source}" if source else "")
+        + "。"
+    )
+    # 关键证据拆到「门店档案-原文证据」字段，正文保持精简（读历史省 token）
+    evidence_lines: list[str] = []
     unique_ids = [
         uid for uid in dict.fromkeys(all_ids)
         if len(tr.by_id[uid].text.strip()) > 2
         and tr.by_id[uid].text.strip() not in {"好的", "对的", "知道了"}
     ][:12]
     if unique_ids:
-        lines.append("关键证据：\n" + evidence_block(unique_ids, tr, ctx))
-    source = "；".join(
-        f"{key}={value}" for key, value in identity.items() if value
-    )
-    lines.append(
-        f"档案口径：单次录音快照；来源：record_id={record_id}"
-        + (f"；{source}" if source else "")
-        + "。"
-    )
+        evidence_lines.append("关键证据：\n" + evidence_block(unique_ids, tr, ctx))
     if ctx.correction_note:
-        lines.append("证据边界：" + ctx.correction_note)
-    return {"门店档案": "\n\n".join(lines)}
+        evidence_lines.append("证据边界：" + ctx.correction_note)
+    payload = {"门店档案": "\n\n".join(lines)}
+    if evidence_lines:
+        payload["门店档案-原文证据"] = "\n\n".join(evidence_lines)
+    return payload
 
 
 def render_next_action(
@@ -1065,6 +1195,7 @@ def render_module(
     tr: Transcript,
     identity: dict[str, str],
     record_id: str,
+    history_date: str = "",
 ) -> dict[str, Any]:
     errors, ctx = validate_candidate(candidate, tr, [module])
     if errors:
@@ -1080,7 +1211,9 @@ def render_module(
     elif module == "quotes":
         payload = render_quotes(candidate[module], tr, ctx)
     elif module == "store-profile":
-        payload = render_store_profile(candidate[module], tr, ctx, identity, record_id)
+        payload = render_store_profile(
+            candidate[module], tr, ctx, identity, record_id, history_date
+        )
     else:
         payload = render_next_action(candidate[module], tr, ctx)
     # 飞书可见正文剥离知识引用标记；引用全量留在事件/完成日志供审计
@@ -1171,12 +1304,20 @@ def build_user_message(
     errors: list[str] | None = None,
     candidates: tuple[dict[str, Any], dict[str, Any]] | None = None,
     notes: str = "",
+    history: str = "",
 ) -> str:
     hard_rules = {
         "concerns": f"九类白名单={json.dumps(CONCERN_NAMES, ensure_ascii=False)}",
         "effectiveness": f"八维白名单={json.dumps([name for name, _ in DIMENSIONS], ensure_ascii=False)}",
         "store-profile": f"六个事实section键={json.dumps(list(PROFILE_SECTIONS), ensure_ascii=False)}",
     }
+    history_block = ""
+    if module == "store-profile" and history:
+        history_block = (
+            "该门店前3天内最近一次拜访的门店档案（动态更新依据：前次确认且本次未提及的事实保留；"
+            "前次待核验本次有新证据则确认；与本次新证据冲突时以本次为准；"
+            "前次结论仍可被本次证据推翻）：\n" + history + "\n\n"
+        )
     message = (
         f"本次唯一任务：{module}。\n"
         f"顶层必须且只能包含_scope和{module}。\n"
@@ -1187,6 +1328,7 @@ def build_user_message(
             "速记非客户原话，原句引用仍只能来自带时间戳的转写）：\n" + notes + "\n\n"
             if notes else ""
         )
+        + history_block
         + "完整转写（必须完整阅读）：\n" + tr.model_text()
     )
     if errors:
@@ -1210,6 +1352,7 @@ def analyze(
     temperature: float,
     candidates: tuple[dict[str, Any], dict[str, Any]] | None = None,
     notes: str = "",
+    history: str = "",
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[str]]:
     usages: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -1220,7 +1363,7 @@ def analyze(
             system_prompt(module),
             build_user_message(
                 tr, module, identity,
-                errors if attempt else None, candidates, notes,
+                errors if attempt else None, candidates, notes, history,
             ),
             model,
             temperature,
@@ -1382,6 +1525,8 @@ def validate_schema(base: str, table: str, profile: dict[str, Any]) -> dict[str,
     text_required.discard(cooperation_field)  # 单选 select，单独校验
     if profile.get("notes_field"):
         text_required.add(profile["notes_field"])
+    if profile.get("evidence_field"):
+        text_required.add(profile["evidence_field"])
     for name in text_required:
         if fields[name].get("type") != "text":
             raise RuntimeError(f"字段{name}必须是text，实际{fields[name].get('type')}")
@@ -1428,6 +1573,9 @@ def fetch_records(
         *profile.get("identity_fields", []),
         profile.get("notes_field", ""),
         profile.get("valid_field", ""),
+        profile.get("evidence_field", ""),
+        profile.get("master_link_field", ""),
+        profile.get("master_date_field", ""),
     ]
     for values in MODULE_FIELDS.values():
         names.extend(values)
@@ -1460,6 +1608,11 @@ def module_state(row: dict[str, Any], module: str) -> str:
         # 是否达成合作默认值「否」无信息量；只看行动策略是否已生成
         return (
             "complete" if not field_blank(row.get("下一步行动策略")) else "empty"
+        )
+    if module == "store-profile":
+        # 证据字段由正文派生，判断只看「门店档案」正文
+        return (
+            "complete" if not field_blank(row.get("门店档案")) else "empty"
         )
     fields = MODULE_FIELDS[module]
     values = [row.get(name) for name in fields]
@@ -1849,12 +2002,22 @@ def main() -> int:
         rid = row["_record_id"]
         identity = {field: cell_text(row.get(field)) for field in profile.get("identity_fields", [])}
         notes = cell_text(row.get(profile.get("notes_field", ""))).strip()
+        history = ""
+        history_date = ""
+        if module == "store-profile":
+            master_rid = master_record_id_of(row, profile)
+            if master_rid:
+                found = find_history_profile(profile, master_rid, rid)
+                if found:
+                    history_date, history_text = found
+                    history = f"进店时间：{history_date}\n{history_text}"
+                    event(rid, module, "history_found", details={"date": history_date})
         event(rid, module, "started")
         print(f"[{rid}][{module}] started", flush=True)
         try:
             tr = parse_transcript(cell_text(row[profile["source_field"]]))
             selected, usages, isolated_errors = analyze(
-                tr, module, identity, args.model, args.temperature, notes=notes
+                tr, module, identity, args.model, args.temperature, notes=notes, history=history
             )
             if selected is None:
                 logger.emit("errors", {
@@ -1891,11 +2054,30 @@ def main() -> int:
                 )
                 print(f"[{rid}][{module}] review_fallback_primary", flush=True)
 
-            payload = render_module(module, selected_by_module[module], tr, identity, rid)
+            payload = render_module(
+                module, selected_by_module[module], tr, identity, rid, history_date
+            )
             event(rid, module, "ready_to_write", fields=list(payload))
             if not args.dry_run:
                 with write_lock:
                     update_record(base, table, rid, payload)
+            if module == "store-profile" and not args.dry_run:
+                try:
+                    master_result = sync_master_profile(
+                        profile, row, payload[MODULE_FIELDS["store-profile"][0]]
+                    )
+                    event(rid, module, "master_synced", details=master_result)
+                    print(
+                        f"[{rid}][store-profile] master_synced="
+                        f"{len(master_result['fields'])}字段",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    event(rid, module, "master_sync_failed", reason=str(exc))
+                    print(
+                        f"[{rid}][store-profile] master_sync_failed: {str(exc)[:120]}",
+                        flush=True,
+                    )
             logger.emit("done", {
                 "record_id": rid,
                 "modules": [module],

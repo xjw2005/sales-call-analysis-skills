@@ -276,11 +276,13 @@ def main():
     assert rendered["关心类目打标"] == ["价格敏感"]
     assert "「您担心的不只是进价，而是最终没有真实利润。」" in rendered["核心金句"]
     assert "「也就是说，您担心的不只是进价，而是最后没有真实利润。」" not in rendered["核心金句"]
-    assert "单次录音快照" in rendered["门店档案"]
+    assert "动态更新档案" in rendered["门店档案"]
     assert "选品偏好" in rendered["门店档案"]
     assert "利润偏好" in rendered["门店档案"]
+    assert "关键证据" in rendered["门店档案-原文证据"]
     for removed in ("老板/关键联系人", "运营与工具能力", "合规与经营风险", "销售接手建议", "证据边界"):
         assert removed not in rendered["门店档案"]
+        assert removed not in rendered["门店档案-原文证据"]
     assert rendered["是否达成合作"] == "否"
     assert "合作状态判定：未合作" in rendered["下一步行动策略"]
     assert "是否达成合作" not in rendered["下一步行动策略"]
@@ -375,6 +377,62 @@ def main():
     )["下一步行动策略"]
     assert "行动判断：不触发" in no_trigger_rendered
     assert "本次无需新增行动" in no_trigger_rendered
+
+    # ---- 门店档案动态更新：历史注入 + 历史保留项校验放行 + 拆解 ----
+    history_message = p.build_user_message(
+        tr, "store-profile", {},
+        history="进店时间：2026-08-01 10:00:00\n一句话画像：老客户\n门店基本信息（稳定档案）：连锁店",
+    )
+    assert "前3天内最近一次拜访的门店档案" in history_message
+    assert "老客户" in history_message
+    assert history_message.index("动态更新依据") < history_message.index("完整转写")
+    no_history_message = p.build_user_message(tr, "store-profile", {})
+    assert "前3天内" not in no_history_message
+
+    # 历史保留项：稳定档案 + 空证据 应放行（来自历史档案）
+    kept = copy.deepcopy(value)
+    profile = kept["store-profile"]
+    profile["one_line"] = "测试门店老客户"
+    profile["one_line_evidence_ids"] = []
+    for key in profile["sections"]:
+        item = profile["sections"][key]
+        item["content"] = f"{key}历史保留内容"
+        item["state_type"] = "稳定档案"
+        item["evidence_ids"] = []
+    errors, _ = p.validate_candidate(
+        p.split_candidate(kept, "store-profile"), tr, ["store-profile"],
+    )
+    assert not errors, errors
+    # 当前状态必须有本次证据（防无证据升级）
+    bad = copy.deepcopy(kept)
+    for item in bad["store-profile"]["sections"].values():
+        item["state_type"] = "当前状态"
+    errors, _ = p.validate_candidate(
+        p.split_candidate(bad, "store-profile"), tr, ["store-profile"],
+    )
+    assert errors and any("作为证据" in error for error in errors)
+
+    # 正文拆解（与 store-profile-split 口径一致）
+    kept_rendered = p.render_module(
+        "store-profile", p.split_candidate(kept, "store-profile"), tr, {}, "rec_test",
+    )
+    dims = p.parse_profile_text(kept_rendered["门店档案"])
+    assert dims["one_line"] == "测试门店老客户"
+    assert dims["basic"] == "basic历史保留内容"
+    assert set(dims) == set(p.PROFILE_SECTIONS) | {"one_line"}
+    # 证据字段与正文分离：正文不含「关键证据」；历史保留项（无本次证据）不生成证据字段
+    assert "关键证据" not in kept_rendered["门店档案"]
+    assert "门店档案-原文证据" not in kept_rendered
+    assert "参考历史进店时间" not in kept_rendered["门店档案"]  # 未传 history_date 时无此行
+    dated_rendered = p.render_module(
+        "store-profile", p.split_candidate(kept, "store-profile"), tr, {}, "rec_test",
+        history_date="2026-08-01 10:00:00",
+    )
+    assert "参考历史进店时间：2026-08-01 10:00:00" in dated_rendered["门店档案"]
+    # module_state：store-profile 只看「门店档案」主字段
+    assert p.module_state({"门店档案": "有", "门店档案-原文证据": ""}, "store-profile") == "complete"
+    assert p.module_state({"门店档案": "", "门店档案-原文证据": "有"}, "store-profile") == "empty"
+    assert p.module_state({"下一步行动策略": "", "是否达成合作": "否"}, "next-action") == "empty"
 
     pending = copy.deepcopy(no_trigger)
     pending["next-action"]["action_judgment"] = "待验证"

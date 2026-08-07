@@ -31,7 +31,21 @@
       "cooperation_field": "是否达成合作",
       "notes_field": "现场速记",
       "valid_field": "是否有效对话",
-      "identity_fields": ["拜访编号", "门店编号", "门店名称"]
+      "identity_fields": ["拜访编号", "门店编号", "门店名称"],
+      "evidence_field": "门店档案-原文证据",
+      "master_table": "tbl6LAWVHP2E9nX7",
+      "master_link_field": "关联门店",
+      "master_date_field": "进店时间",
+      "master_history_days": 3,
+      "master_fields": {
+        "一句画像": "one_line",
+        "门店基本信息": "basic",
+        "主营品类与品牌": "categories_brands",
+        "经营模式": "business_model",
+        "选品偏好": "selection_motion",
+        "利润偏好": "price_profit",
+        "合作偏好与排斥项": "cooperation_preferences"
+      }
     }
   }
 }

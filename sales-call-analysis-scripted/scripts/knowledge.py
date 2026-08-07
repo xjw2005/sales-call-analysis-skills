@@ -197,6 +197,12 @@ def parse_entries(md_text: str, relpath: str, domain: str) -> list[KnowledgeEntr
     eid: str | None = None
     buf: list[str] = []
     for line in md_text.splitlines():
+        if line.startswith("## 变更记录"):
+            # 文件末尾的变更记录不属于任何条目，到此处截断（README：解析器跳过）
+            if eid is not None:
+                entries.append(_build_entry(relpath, domain, title, eid, buf))
+            eid = None
+            break
         m = ENTRY_HEAD_RE.match(line)
         if m:
             if eid is not None:
