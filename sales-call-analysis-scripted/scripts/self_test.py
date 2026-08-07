@@ -378,7 +378,14 @@ def main():
     assert "行动判断：不触发" in no_trigger_rendered
     assert "本次无需新增行动" in no_trigger_rendered
 
-    # ---- 门店档案动态更新：历史注入 + 历史保留项校验放行 + 拆解 ----
+    # ---- 门店档案动态更新：link 字段格式 + 历史注入 + 校验放行 + 拆解 ----
+    assert p.master_record_id_of(
+        {"关联门店": [{"id": "recX1", "text": "门店A"}]}, {"master_link_field": "关联门店"},
+    ) == "recX1"
+    assert p.master_record_id_of(
+        {"关联门店": ["recX2"]}, {"master_link_field": "关联门店"},
+    ) == "recX2"
+    assert p.master_record_id_of({}, {"master_link_field": "关联门店"}) is None
     history_message = p.build_user_message(
         tr, "store-profile", {},
         history="进店时间：2026-08-01 10:00:00\n一句话画像：老客户\n门店基本信息（稳定档案）：连锁店",

@@ -996,10 +996,16 @@ def render_quotes(value: dict[str, Any], tr: Transcript, ctx: EvidenceContext) -
 
 
 def master_record_id_of(row: dict[str, Any], profile: dict[str, Any]) -> str | None:
-    """从 02 表行取「关联门店」link 指向的 01 主档记录 ID。"""
+    """从 02 表行取「关联门店」link 指向的 01 主档记录 ID。
+
+    lark-cli 的 link 字段返回 [{"id": "recxxx", "text": "..."}]，需取 dict 的 id。
+    """
     value = row.get(profile.get("master_link_field", ""))
     if isinstance(value, list) and value:
-        return str(value[0])
+        item = value[0]
+        if isinstance(item, dict):
+            return str(item.get("id") or "")
+        return str(item)
     return None
 
 
