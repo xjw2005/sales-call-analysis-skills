@@ -39,7 +39,9 @@ ROLE_BUILD = ROLE_SKILL / "scripts" / "build_role_profile.py"
 ROLE_APPLY = ROLE_SKILL / "scripts" / "apply_role_map.py"
 ROLE_AUDIT = ROLE_SKILL / "scripts" / "audit_role_map.py"
 ROLE_PROMPT = ROLE_SKILL / "references" / "role-prompt.md"
+VALIDITY_PROMPT = ROOT / "references" / "validity-prompt.md"
 ALLOWED_ROLES = {"销售", "客户", "旁人"}
+_VALIDITY_PROMPT_TEXT: str | None = None
 ACTIVE_ASR = {"submitted", "pending", "running"}
 TERMINAL = {"written", "asr_failed"}
 INLINE_SPEAKER = re.compile(r"\[spk(\d+)\]\[(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\]")
@@ -213,6 +215,8 @@ def validate_schema(profile: dict[str, Any]) -> None:
             raise RuntimeError(f"飞书缺少字段: {valid_field}")
         if fields[valid_field].get("type") != "select":
             raise RuntimeError(f"{valid_field} 必须是单选字段")
+    if "valid_min_seconds" in profile and not isinstance(profile["valid_min_seconds"], (int, float)):
+        raise RuntimeError("valid_min_seconds 必须是数字（秒）")
 
 
 def fetch_rows(
@@ -226,6 +230,8 @@ def fetch_rows(
         profile["transcript_field"],
         *profile.get("identity_fields", []),
     ]
+    if profile.get("valid_field"):
+        names.append(profile["valid_field"])
     rows: list[dict[str, Any]] = []
     offset = 0
     while True:
@@ -1342,50 +1348,106 @@ def write_transcript(profile: dict[str, Any], record_id: str, text: str, overwri
     raise RuntimeError("飞书写后复读与本地文本不一致")
 
 
-def judge_validity(profile: dict[str, Any], labeled: str) -> str:
-    """按角色转写统计自动初判有效性。
-
-    无效 = 转写后没有实质性内容（提取不了信息、无参考价值）：正文总字符数
-    不足 valid_min_chars（默认 100）或客户发言行数不足 valid_min_customer_lines
-    （默认 2）。阈值可在 profile 配置。
-    """
-    min_chars = int(profile.get("valid_min_chars", 100))
-    min_customer_lines = int(profile.get("valid_min_customer_lines", 2))
-    chars = 0
-    customer_lines = 0
+def transcript_duration(labeled: str) -> float | None:
+    """从转写最后一行 end 时间戳兜底估算总时长（秒）；解析不到返回 None。"""
+    last_end: float | None = None
     for line in labeled.splitlines():
         match = LINE_RE.match(line)
         if not match:
             continue
-        chars += len(re.sub(r"\s", "", match.group("text")))
-        if match.group("role") == "客户":
-            customer_lines += 1
-    if chars < min_chars or customer_lines < min_customer_lines:
-        return "无效"
-    return "有效"
+        stamp = match.group("end").split(":")
+        seconds = (
+            float(stamp[-1])
+            + int(stamp[-2]) * 60
+            + (int(stamp[-3]) * 3600 if len(stamp) == 3 else 0)
+        )
+        if last_end is None or seconds > last_end:
+            last_end = seconds
+    return last_end
 
 
-def write_validity(profile: dict[str, Any], record_id: str, labeled: str) -> None:
-    """写回「是否有效对话」：仅在字段为空时写入，不覆盖人工复核过的值。"""
+def judge_validity(
+    cfg: dict[str, Any],
+    profile: dict[str, Any],
+    labeled: str,
+    duration_seconds: float | None = None,
+) -> dict[str, Any]:
+    """两层自动判定「是否有效对话」。
+
+    第一层硬门禁（纯规则）：录音时长不足 valid_min_seconds（默认 180 秒）
+    直接填「录音过短」；转写为空或没有一行能解析直接填「内容无效」。
+    第二层模型内容判断（核心）：让模型读完整转写，判断内容是否属于
+    商业场景、有没有记录价值，输出 有效/内容无效 与理由。
+
+    返回 {"value": "有效|录音过短|内容无效", "reason": str,
+          "source": "rule|llm|model_error"}。
+    模型失败时保守填「内容无效」（fail-closed，人工可在飞书改回）。
+    """
+    min_seconds = int(profile.get("valid_min_seconds", 180))
+    duration = duration_seconds if duration_seconds is not None else transcript_duration(labeled)
+    if duration is not None and duration < min_seconds:
+        return {
+            "value": "录音过短",
+            "reason": f"录音时长 {duration:.0f} 秒，不足 {min_seconds} 秒",
+            "source": "rule",
+        }
+    parsed = [m for m in (LINE_RE.match(line) for line in labeled.splitlines()) if m]
+    if not parsed:
+        return {"value": "内容无效", "reason": "转写为空或格式无法解析", "source": "rule"}
+    user = (
+        f"录音时长约 {duration:.0f} 秒。\n\n以下为角色转写全文：\n\n{labeled}"
+        if duration is not None
+        else f"以下为角色转写全文：\n\n{labeled}"
+    )
+    global _VALIDITY_PROMPT_TEXT
+    if _VALIDITY_PROMPT_TEXT is None:
+        _VALIDITY_PROMPT_TEXT = VALIDITY_PROMPT.read_text(encoding="utf-8")
+    try:
+        raw = llm_call(cfg, _VALIDITY_PROMPT_TEXT, user)
+        verdict = extract_json_object(raw)
+        value = verdict.get("result")
+        if value not in {"有效", "内容无效"}:
+            raise ValueError(f"模型输出 result 非法: {value!r}")
+        return {
+            "value": value,
+            "reason": str(verdict.get("reason") or "").strip()[:200],
+            "source": "llm",
+        }
+    except Exception as exc:
+        return {"value": "内容无效", "reason": f"模型判断失败: {exc}", "source": "model_error"}
+
+
+def write_validity(
+    cfg: dict[str, Any],
+    profile: dict[str, Any],
+    record_id: str,
+    labeled: str,
+    duration_seconds: float | None = None,
+) -> dict[str, Any]:
+    """写回「是否有效对话」：仅在字段为空时写入，不覆盖人工复核过的值。
+
+    返回判定详情（value/reason/source），供调用方记录事件。
+    """
     field = profile.get("valid_field")
     if not field:
-        return
+        return {"value": "", "reason": "未配置 valid_field", "source": "skip"}
     current = read_record_field(profile, record_id, field)
     if not is_blank(current):
-        return
-    value = judge_validity(profile, labeled)
+        current_text = current[0] if isinstance(current, list) else str(current)
+        return {"value": current_text, "reason": "字段已有内容，不覆盖", "source": "skip"}
+    verdict = judge_validity(cfg, profile, labeled, duration_seconds)
     data = lark(
         "base", "+record-upsert",
         "--base-token", profile["base_token"],
         "--table-id", profile["table_id"],
         "--record-id", record_id,
-        "--json", json.dumps({field: value}, ensure_ascii=False),
+        "--json", json.dumps({field: verdict["value"]}, ensure_ascii=False),
     )
     if not data.get("updated"):
         raise RuntimeError("飞书没有确认更新有效性")
     for attempt in range(3):
         if not is_blank(read_record_field(profile, record_id, field)):
-            return
+            return verdict
         time.sleep(attempt + 1)
     raise RuntimeError("飞书写后复读有效性为空")
 
@@ -1565,7 +1627,19 @@ def poll_run(cfg: dict[str, Any], run_dir: Path, workers: int, dry_run: bool) ->
                 result.update({"status": "write_error", "error": str(exc)})
             else:
                 try:
-                    write_validity(state["profile"], rid, labeled)
+                    verdict = write_validity(
+                        run_cfg,
+                        state["profile"],
+                        rid,
+                        labeled,
+                        state.get("duration_seconds"),
+                    )
+                    append_event(run_dir, {
+                        "record_id": rid,
+                        "validity": verdict.get("value"),
+                        "validity_reason": verdict.get("reason"),
+                        "validity_source": verdict.get("source"),
+                    })
                 except Exception as exc:
                     result["validity_error"] = str(exc)
                 result.update({"status": "written", "error": None, "written_at": now()})

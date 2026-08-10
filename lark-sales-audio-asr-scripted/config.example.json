@@ -23,7 +23,11 @@
     "hotword_weight": 10
   },
   "role_llm_config_path": "",
-  "hotwords": ["小安素", "全安素", "亲舒"],
+  "hotwords": [
+    "小安素",
+    "全安素",
+    "亲舒"
+  ],
   "profiles": {
     "default": {
       "base_token": "",
@@ -31,10 +35,13 @@
       "view_id": "",
       "attachment_field": "录音文件",
       "transcript_field": "完整对话-文字",
-      "identity_fields": ["门店编号", "门店名称", "门店联系人"],
+      "identity_fields": [
+        "门店编号",
+        "门店名称",
+        "门店联系人"
+      ],
       "valid_field": "",
-      "valid_min_chars": 100,
-      "valid_min_customer_lines": 2
+      "valid_min_seconds": 120
     }
   }
 }

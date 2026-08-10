@@ -365,22 +365,29 @@ def main() -> int:
     assert [item["end_ms"] for item in merged_items] == [1000, 3000, 5000]
     assert pipeline.result_container(pipeline.load_json(merged_path))["text"] == "你好您好再见"
 
-    # ---- 是否有效对话自动初判 ----
+    # ---- 是否有效对话自动初判（两层：硬门禁 + 模型内容判断）----
+    # 硬门禁：时长不足 180 秒直接无效（不调模型）
     short = (
         "[00:00:00.000–00:00:00.500] 客户：嗯\n"
         "[00:00:00.500–00:00:01.000] 销售：好\n"
     )
-    assert pipeline.judge_validity({}, short) == "无效"
-    long_enough = "".join(
-        f"[00:00:{index:02d}.000–00:00:{index + 1:02d}.000] 客户：今天进货的事情我们商量一下{index}\n"
-        for index in range(10)
-    )
-    assert pipeline.judge_validity({}, long_enough) == "有效"
-    no_customer = "".join(
-        f"[00:00:{index:02d}.000–00:00:{index + 1:02d}.000] 销售：介绍产品{index}\n"
-        for index in range(20)
-    )
-    assert pipeline.judge_validity({}, no_customer) == "无效"
+    verdict = pipeline.judge_validity({}, {}, short)
+    assert verdict == {"value": "录音过短", "reason": "录音时长 1 秒，不足 180 秒", "source": "rule"}, verdict
+    # 179 秒（含）以下「录音过短」，180 秒整放行到模型层
+    under = "[00:00:00.000–00:02:59.000] 客户：嗯\n"
+    assert pipeline.judge_validity({}, {}, under, duration_seconds=179.0)["value"] == "录音过短"
+    exactly = "[00:00:00.000–00:03:00.000] 客户：嗯\n"
+    # 180 秒整：硬门禁放行（不再由 rule 判），进入模型层（cfg 缺模型配置时是 model_error）
+    assert pipeline.judge_validity({}, {}, exactly, duration_seconds=180.0)["source"] != "rule"
+    # 时长不足但显式传入更长 duration 时，规则层放行，转写为空则规则判「内容无效」
+    assert pipeline.judge_validity({}, {}, "", duration_seconds=200.0)["source"] == "rule"
+    # 转写无法解析任何行 -> 规则判「内容无效」
+    assert pipeline.judge_validity({}, {}, "没有时间戳的乱七八糟内容", duration_seconds=300.0)["value"] == "内容无效"
+    # transcript_duration 兜底：无时间戳/空文本返回 None
+    assert pipeline.transcript_duration("") is None
+    assert pipeline.transcript_duration(
+        "[00:01:00.000–00:02:00.000] 销售：好\n[00:02:00.000–00:04:00.000] 客户：好\n"
+    ) == 240.0
 
     print("self_test: OK")
     return 0
