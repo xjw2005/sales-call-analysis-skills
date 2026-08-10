@@ -402,14 +402,15 @@ def sanitize_candidate(
     modules: list[str],
     identity: dict[str, str] | None = None,
     known_address: str = "",
-    retain_stable: bool = False,
+    trusted_sources: str = "",
 ) -> dict[str, Any]:
     """只做保守修正：删无效金句/非未来行动；无客户证据的档案项降为未确认。
 
     known_address: 注入的主档地址文本，其中的省/市/区 token 视为已知事实，
                    不因证据中未出现而被判为编造。
-    retain_stable: 本次注入了历史档案或主档地址时，允许「稳定档案+空证据」
-                   保留（历史保留项/主档已知事实，与 validate_store_profile 放行一致）。
+    trusted_sources: 本次注入的可信来源全文（历史档案 + 主档地址 + 人工纠正）。
+                   仅当「稳定档案+空证据」的内容能在可信来源中找到依据时才保留，
+                   否则降为未确认（防模型借注入任意放行无证据事实）。
     """
     scope_errors: list[str] = []
     ctx = validate_scope(candidate.get("_scope", {}), tr, scope_errors)
@@ -484,9 +485,14 @@ def sanitize_candidate(
                     "".join(by_id[uid].text for uid in ids),
                 ):
                     item["evidence_ids"] = ids
-                elif (retain_stable or known_tokens) and item.get("state_type") == "稳定档案" and not ids:
-                    # 注入了历史档案/主档地址：稳定档案允许无本次证据
-                    # （历史保留项/主档已知事实，validate_store_profile 放行一致）
+                elif (
+                    item.get("state_type") == "稳定档案"
+                    and not ids
+                    and trusted_sources.strip()
+                    and named_ok(str(item.get("content", "")), trusted_sources)
+                ):
+                    # 「稳定档案+空证据」仅当内容能在可信来源（历史档案/地址/纠正）
+                    # 中找到依据时保留；否则不允许无依据放行
                     item["evidence_ids"] = []
                 else:
                     item["content"] = "未确认"
@@ -862,6 +868,7 @@ def validate_next_action_daily(
     tr: Transcript,
     ctx: EvidenceContext,
     errors: list[str],
+    action_history: str = "",
 ) -> None:
     """日常模式 next-action：闭环（上次行动完成情况）+ 行动策略（不判合作状态）。"""
     keys = {
@@ -881,9 +888,14 @@ def validate_next_action_daily(
         errors.append("总结闭环.summary不能为空")
     if re.search(r"U\d{4}", str(closure["summary"])):
         errors.append("总结闭环.summary不得直接展示发言ID")
+    has_history = bool(action_history.strip())
     items = closure["items"]
     if not isinstance(items, list) or len(items) > 3:
         errors.append("总结闭环.items必须为0至3条")
+    elif has_history and not items:
+        errors.append("提供了上次行动策略但总结闭环.items为空，必须逐条判断上次行动完成情况")
+    elif not has_history and items:
+        errors.append("未提供上次行动策略但总结闭环.items非空，不得编造上次行动")
     else:
         for i, item in enumerate(items, 1):
             label = f"闭环{i}"
@@ -900,8 +912,7 @@ def validate_next_action_daily(
             else:
                 if not nonempty(item.get("reason")):
                     errors.append(f"{label}.reason不能为空（未完成需说明原因）")
-                if item["evidence_ids"]:
-                    validate_ids(item["evidence_ids"], tr, ctx, errors, label, minimum=0)
+                validate_ids(item["evidence_ids"], tr, ctx, errors, label, minimum=0)
 
     judgment = value["action_judgment"]
     if judgment not in {"触发", "不触发", "待验证"}:
@@ -948,7 +959,8 @@ def validate_next_action_daily(
                     errors.append(f"{label}.{key}不能为空")
                 if re.search(r"U\d{4}", str(item[key])):
                     errors.append(f"{label}.{key}不得直接展示发言ID")
-            validate_ids(item["evidence_ids"], tr, ctx, errors, label)
+            # 日常模式允许无当前录音证据：历史延续型建议（对应上次未完成行动）没有本次发言可引
+            validate_ids(item["evidence_ids"], tr, ctx, errors, label, minimum=0)
 
     if isinstance(confirmed, list) and isinstance(recommended, list):
         has_actions = bool(confirmed or recommended)
@@ -974,6 +986,7 @@ def validate_candidate(
     tr: Transcript,
     modules: list[str],
     mode: str = "first",
+    action_history: str = "",
 ) -> tuple[list[str], EvidenceContext]:
     errors: list[str] = []
     if not isinstance(candidate, dict):
@@ -1000,7 +1013,7 @@ def validate_candidate(
             validate_store_profile(value, tr, ctx, errors)
         elif module == "next-action":
             if mode == "daily":
-                validate_next_action_daily(value, tr, ctx, errors)
+                validate_next_action_daily(value, tr, ctx, errors, action_history)
             else:
                 validate_next_action(value, tr, ctx, errors)
     return errors, ctx
@@ -1138,11 +1151,22 @@ def render_quotes(value: dict[str, Any], tr: Transcript, ctx: EvidenceContext) -
 
 
 def visit_mode(row: dict[str, Any], profile: dict[str, Any]) -> str:
-    """按「拜访阶段」分流：等于首访破冰（或未填）→ first；其他阶段 → daily。"""
+    """按「拜访阶段」分流。
+
+    first：未填或等于首访破冰；daily：在白名单的日常阶段；
+    unknown：非空但不在任何已知选项（拼写错误/新阶段）——调用方应跳过该记录，
+    不静默按 daily 处理（避免意外跳过隐性需求/打分/金句）。
+    """
     stage = cell_text(row.get(profile.get("stage_field", ""))).strip()
-    if stage and stage != profile.get("first_stage_choice", "首访破冰"):
+    if not stage or stage == profile.get("first_stage_choice", "首访破冰"):
+        return "first"
+    daily_choices = set(profile.get("daily_stage_choices") or [])
+    if daily_choices and stage in daily_choices:
         return "daily"
-    return "first"
+    if not daily_choices:
+        # 未配置白名单时保持旧行为（非首访即日常）
+        return "daily"
+    return "unknown"
 
 
 def master_record_id_of(row: dict[str, Any], profile: dict[str, Any]) -> str | None:
@@ -1232,14 +1256,44 @@ def within_history_days(value: Any, days: int) -> bool:
     return (datetime.now() - parsed).days <= days
 
 
+_STORE_LOCKS: dict[str, threading.Lock] = {}
+_STORE_LOCKS_GUARD = threading.Lock()
+
+
+def store_lock_for(master_rid: str) -> threading.Lock:
+    """同一门店的记录串行处理（日常模式读历史/写回需确定顺序）。"""
+    with _STORE_LOCKS_GUARD:
+        lock = _STORE_LOCKS.get(master_rid)
+        if lock is None:
+            lock = threading.Lock()
+            _STORE_LOCKS[master_rid] = lock
+        return lock
+
+
+def _closure_field_of(profile: dict[str, Any]) -> str:
+    return profile.get("closure_field") or MODULE_FIELDS["next-action"][-1]
+
+
+def _earlier_than(row_date: Any, current_date: Any) -> bool:
+    """历史记录进店时间必须早于当前记录（防补录/重跑时间穿越）。"""
+    current = _parse_datetime(current_date)
+    if current is None:
+        return True  # 当前时间未知时保守放行（保持原行为）
+    parsed = _parse_datetime(row_date)
+    if parsed is None:
+        return False  # 历史时间无法解析时不读取（避免误用）
+    return parsed < current
+
+
 def find_history_profiles(
     profile: dict[str, Any],
     master_rid: str,
     exclude_rid: str,
     limit: int = 1,
     within_days: int | None = None,
+    current_date: Any = None,
 ) -> list[tuple[str, str]]:
-    """02 表查该门店进店时间最近的、档案非空的门店档案（最多 limit 份）。
+    """02 表查该门店进店时间最近（且早于当前记录）、档案非空的门店档案（最多 limit 份）。
 
     返回 [(进店时间原文, 档案正文), ...]；within_days 非空时只取该天数内的
     （最近一份超窗即停止）。只读「门店档案」精简正文，不读证据字段（省 token）。
@@ -1265,10 +1319,12 @@ def find_history_profiles(
     for row in rows_of(data):
         if row["_record_id"] == exclude_rid:
             continue
+        date_value = row.get(profile["master_date_field"])
+        if current_date is not None and not _earlier_than(date_value, current_date):
+            continue  # 不早于当前记录 → 时间穿越，跳过
         text = cell_text(row.get(profile_field)).strip()
         if not text:
             continue
-        date_value = row.get(profile["master_date_field"])
         if within_days is not None and date_value and not within_history_days(date_value, within_days):
             break  # 最近一条已超窗口，更早的不再看
         found.append((cell_text(date_value), text))
@@ -1290,12 +1346,15 @@ def find_history_profile(
 
 def find_last_actions(
     profile: dict[str, Any], master_rid: str, exclude_rid: str,
+    current_date: Any = None,
 ) -> tuple[str, str] | None:
-    """日常模式：该门店最近一次拜访的「下一步行动策略」+「总结闭环」。
-    返回 (行动策略正文, 闭环正文)；闭环可能为空串；无任何历史行动则 None。
+    """日常模式：该门店前一次（时间早于当前记录、不跨拜访）的「下一步行动策略」+「总结闭环」。
+
+    返回 (行动策略正文, 闭环正文)；前次行动为空时返回 (空串, 空串)（表示前次无行动，
+    不静默跨越多次拜访去找更早的非空行动）；无历史拜访则 None。
     """
     action_field = MODULE_FIELDS["next-action"][0]
-    closure_field = MODULE_FIELDS["next-action"][-1]
+    closure_field = _closure_field_of(profile)
     filter_json = json.dumps(
         {
             "logic": "and",
@@ -1316,10 +1375,11 @@ def find_last_actions(
     for row in rows_of(data):
         if row["_record_id"] == exclude_rid:
             continue
-        action_text = cell_text(row.get(action_field)).strip()
-        if not action_text:
-            continue
-        return action_text, cell_text(row.get(closure_field)).strip()
+        date_value = row.get(profile["master_date_field"])
+        if current_date is not None and not _earlier_than(date_value, current_date):
+            continue  # 时间穿越，跳过
+        # 不跳过行动为空的记录：第一条早于当前的就是「前一次拜访」
+        return cell_text(row.get(action_field)).strip(), cell_text(row.get(closure_field)).strip()
     return None
 
 
@@ -1437,6 +1497,7 @@ def render_next_action(
 
 def render_next_action_daily(
     value: dict[str, Any], tr: Transcript, ctx: EvidenceContext,
+    closure_field: str = "",
 ) -> dict[str, Any]:
     """日常模式：一次输出「总结闭环」+「下一步行动策略」两个字段。"""
     closure = value["closure"]
@@ -1448,7 +1509,7 @@ def render_next_action_daily(
     for i, item in enumerate(items, 1):
         done = item["done"]
         line = f"{i}. 【{done}】{item['action']}"
-        if not nonempty(item.get("reason")) and done != "已完成":
+        if nonempty(item.get("reason")) and done != "已完成":
             line += f"；原因：{item['reason']}"
         closure_lines.append(line)
     action_lines = [
@@ -1457,7 +1518,7 @@ def render_next_action_daily(
     ]
     action_lines.append(_render_action_sections(value))
     return {
-        "上一次行动与这一次行动总结闭环": "\n".join(closure_lines),
+        closure_field or "上一次行动与这一次行动总结闭环": "\n".join(closure_lines),
         "下一步行动策略": "\n".join(action_lines),
     }
 
@@ -1470,8 +1531,10 @@ def render_module(
     record_id: str,
     history_date: str = "",
     mode: str = "first",
+    action_history: str = "",
+    closure_field: str = "",
 ) -> dict[str, Any]:
-    errors, ctx = validate_candidate(candidate, tr, [module], mode)
+    errors, ctx = validate_candidate(candidate, tr, [module], mode, action_history)
     if errors:
         raise ValueError("渲染前校验失败: " + "；".join(errors))
     if module == "explicit-needs":
@@ -1489,7 +1552,7 @@ def render_module(
             candidate[module], tr, ctx, identity, record_id, history_date
         )
     elif module == "next-action" and mode == "daily":
-        payload = render_next_action_daily(candidate[module], tr, ctx)
+        payload = render_next_action_daily(candidate[module], tr, ctx, closure_field)
     else:
         payload = render_next_action(candidate[module], tr, ctx)
     # 飞书可见正文剥离知识引用标记；引用全量留在事件/完成日志供审计
@@ -1685,11 +1748,14 @@ def analyze(
         except (ValueError, json.JSONDecodeError) as exc:
             errors = [f"输出不是合法JSON: {exc}"]
             continue
+        trusted_sources = "\n".join(
+            part for part in (history, address, correction) if part.strip()
+        )
         last = sanitize_candidate(
             last, tr, [module], identity,
-            known_address=address, retain_stable=retain_stable,
+            known_address=address, trusted_sources=trusted_sources,
         )
-        errors, _ = validate_candidate(last, tr, [module], mode)
+        errors, _ = validate_candidate(last, tr, [module], mode, action_history)
         if not errors and kb.knowledge_block_for(module):
             bad_refs = kb.validate_knowledge_refs(last, kb.injected_ids(module))
             if bad_refs:
@@ -1728,15 +1794,24 @@ def module_signature(module: str, candidate: dict[str, Any]) -> Any:
             )),
         )
     if "closure" in value:
-        # 日常模式：闭环骨架 + 行动判断 + 建议行动证据
+        # 日常模式：覆盖全部写入飞书的可见业务字段（防双跑签名失真）
+        def norm_action(item: dict[str, Any]) -> tuple:
+            return tuple(str(item.get(k, "")) for k in (
+                "topic", "owner", "timeframe", "action", "reason", "acceptance",
+            )) + (tuple(sorted(str(x) for x in item.get("evidence_ids", []))),)
         return (
+            str(value["closure"].get("summary", "")),
             tuple(sorted(
-                (item["action"], item["done"], tuple(sorted(item["evidence_ids"])))
+                (str(item.get("action", "")), str(item.get("done", "")),
+                 str(item.get("reason", "")),
+                 tuple(sorted(str(x) for x in item.get("evidence_ids", []))))
                 for item in value["closure"]["items"]
             )),
             value["action_judgment"],
-            tuple(sorted(tuple(sorted(x["evidence_ids"])) for x in value["recommended_actions"])),
-            value["second_visit"]["value"],
+            tuple(sorted(norm_action(x) for x in value["confirmed_actions"])),
+            tuple(sorted(norm_action(x) for x in value["recommended_actions"])),
+            (value["second_visit"].get("value", ""),
+             str(value["second_visit"].get("reason", ""))),
         )
     return (
         value["cooperation_status"],
@@ -1790,6 +1865,7 @@ def review_candidates(
     temperature: float,
     review_mode: str,
     notes: str = "",
+    history: str = "",
     address: str = "",
     retain_stable: bool = False,
     correction: str = "",
@@ -1812,7 +1888,7 @@ def review_candidates(
             continue
         second, usage2, errors2 = analyze(
             tr, module, identity, model, temperature, notes=notes,
-            address=address, retain_stable=retain_stable, correction=correction,
+            history=history, address=address, retain_stable=retain_stable, correction=correction,
             mode=mode, action_history=action_history,
         )
         usages.extend(usage2)
@@ -1826,7 +1902,8 @@ def review_candidates(
             continue
         third, usage3, errors3 = analyze(
             tr, module, identity, model, temperature, notes=notes,
-            address=address, retain_stable=retain_stable, correction=correction,
+            history=history, address=address, retain_stable=retain_stable, correction=correction,
+            mode=mode, action_history=action_history,
         )
         usages.extend(usage3)
         if third is None:
@@ -1908,6 +1985,25 @@ def validate_schema(base: str, table: str, profile: dict[str, Any]) -> dict[str,
         raise RuntimeError("关心类目打标必须是多选字段")
     if sorted(options) != sorted(CONCERN_NAMES):
         raise RuntimeError(f"关心类目选项与白名单不一致: {options}")
+    stage_field = profile.get("stage_field")
+    if stage_field:
+        stage = fields.get(stage_field)
+        if stage is None:
+            raise RuntimeError(f"Base缺少字段: {stage_field}")
+        stage_options = [x["name"] for x in stage.get("options", [])]
+        first_choice = profile.get("first_stage_choice", "首访破冰")
+        if stage.get("type") != "select" or stage.get("multiple"):
+            raise RuntimeError(f"字段{stage_field}必须是单选字段")
+        if first_choice not in stage_options:
+            raise RuntimeError(f"{stage_field}选项缺少首访阶段「{first_choice}」")
+        missing_daily = [
+            c for c in (profile.get("daily_stage_choices") or [])
+            if c not in stage_options
+        ]
+        if missing_daily:
+            raise RuntimeError(
+                f"{stage_field}选项缺少日常阶段配置: {missing_daily}"
+            )
     return fields
 
 
@@ -1958,9 +2054,10 @@ def field_blank(value: Any) -> bool:
     return value is None or value == "" or value == []
 
 
-def module_state(row: dict[str, Any], module: str) -> str:
+def module_state(row: dict[str, Any], module: str, mode: str = "first") -> str:
     if module == "next-action":
-        # 是否达成合作默认值「否」无信息量；只看行动策略是否已生成
+        # 首访/日常都只看「下一步行动策略」是否已生成；互斥字段
+        # （首访=是否达成合作、日常=总结闭环）不参与判断，避免模式切换误判
         return (
             "complete" if not field_blank(row.get("下一步行动策略")) else "empty"
         )
@@ -2287,7 +2384,7 @@ def main() -> int:
         rescue_map = rescue_targets(rescue_path)
 
     tasks = []
-    skipped_blank = skipped_complete = skipped_invalid = partial = 0
+    skipped_blank = skipped_complete = skipped_invalid = skipped_unknown_stage = partial = 0
     for row in rows:
         rid = row.get("_record_id")
         if record_ids and rid not in record_ids:
@@ -2303,12 +2400,19 @@ def main() -> int:
             continue
         requested = []
         mode = visit_mode(row, profile)
+        if mode == "unknown":
+            skipped_unknown_stage += 1
+            logger.emit("skip_unknown_stage", {
+                "record_id": rid,
+                "stage": cell_text(row.get(profile.get("stage_field", ""))).strip(),
+            })
+            continue
         for module in modules:
             if mode == "daily" and module not in DAILY_MODULES:
                 continue  # 日常拜访不做隐性需求/打分/金句
             if rescue_map is not None and (rid not in rescue_map or module not in rescue_map[rid]):
                 continue
-            state = module_state(row, module)
+            state = module_state(row, module, mode)
             if module in overwrite or args.input_file:
                 requested.append(module)
             elif state == "empty":
@@ -2333,7 +2437,8 @@ def main() -> int:
     print(
         f"[init] records={len(rows)} record_tasks={len(tasks)} "
         f"module_jobs={len(module_jobs)} workers={args.workers} blank={skipped_blank} "
-        f"invalid={skipped_invalid} complete_modules={skipped_complete} partial_modules={partial}",
+        f"invalid={skipped_invalid} unknown_stage={skipped_unknown_stage} "
+        f"complete_modules={skipped_complete} partial_modules={partial}",
         flush=True,
     )
     if args.preflight:
@@ -2357,147 +2462,168 @@ def main() -> int:
         })
 
     def process_module(row: dict[str, Any], module: str) -> None:
-        rid = row["_record_id"]
-        mode = visit_mode(row, profile)
-        identity = {field: cell_text(row.get(field)) for field in profile.get("identity_fields", [])}
-        notes = cell_text(row.get(profile.get("notes_field", ""))).strip()
-        history = ""
-        history_date = ""
-        address = ""
-        correction = ""
-        action_history = ""
-        if module == "store-profile":
-            correction = cell_text(row.get(profile.get("correction_field", ""))).strip()
-            if correction:
-                event(rid, module, "correction_injected")
+
+        # 同门店记录串行（日常模式历史读取/写回需要确定顺序）
+        lock = None
+        if visit_mode(row, profile) == "daily" and module in ("store-profile", "next-action"):
             master_rid = master_record_id_of(row, profile)
             if master_rid:
-                address = read_master_address(profile, master_rid)
-                if address:
-                    event(rid, module, "address_injected", details={"address": address})
-                if mode == "daily":
-                    # 日常：读前 history_profiles 次档案（含日期标注）累计更新
-                    found = find_history_profiles(
+                lock = store_lock_for(master_rid)
+        if lock:
+            lock.acquire()
+        try:
+            rid = row["_record_id"]
+            mode = visit_mode(row, profile)
+            identity = {field: cell_text(row.get(field)) for field in profile.get("identity_fields", [])}
+            notes = cell_text(row.get(profile.get("notes_field", ""))).strip()
+            history = ""
+            history_date = ""
+            address = ""
+            correction = ""
+            action_history = ""
+            if module == "store-profile":
+                correction = cell_text(row.get(profile.get("correction_field", ""))).strip()
+                if correction:
+                    event(rid, module, "correction_injected")
+                master_rid = master_record_id_of(row, profile)
+                if master_rid:
+                    address = read_master_address(profile, master_rid)
+                    if address:
+                        event(rid, module, "address_injected", details={"address": address})
+                    if mode == "daily":
+                        # 日常：读前 history_profiles 次档案（含日期标注）累计更新
+                        found = find_history_profiles(
+                            profile, master_rid, rid,
+                            limit=int(profile.get("history_profiles", 3)),
+                            current_date=row.get(profile.get("master_date_field")),
+                        )
+                        if found:
+                            history = "\n\n".join(
+                                f"进店时间：{date}\n{text}" for date, text in found
+                            )
+                            event(rid, module, "history_found", details={"count": len(found)})
+                    else:
+                        found = find_history_profile(profile, master_rid, rid)
+                        if found:
+                            history_date, history_text = found
+                            history = f"进店时间：{history_date}\n{history_text}"
+                            event(rid, module, "history_found", details={"date": history_date})
+            elif module == "next-action" and mode == "daily":
+                master_rid = master_record_id_of(row, profile)
+                if master_rid:
+                    found = find_last_actions(
                         profile, master_rid, rid,
-                        limit=int(profile.get("history_profiles", 3)),
+                        current_date=row.get(profile.get("master_date_field")),
                     )
                     if found:
-                        history = "\n\n".join(
-                            f"进店时间：{date}\n{text}" for date, text in found
+                        action_text, closure_text = found
+                        action_history = f"上次下一步行动策略：\n{action_text}"
+                        if closure_text:
+                            action_history += f"\n\n上次总结闭环：\n{closure_text}"
+                        event(rid, module, "action_history_found")
+            retain_stable = bool(history) or bool(address)
+            event(rid, module, "started")
+            print(f"[{rid}][{module}] started (mode={mode})", flush=True)
+            try:
+                tr = parse_transcript(cell_text(row[profile["source_field"]]))
+                selected, usages, isolated_errors = analyze(
+                    tr, module, identity, args.model, args.temperature, notes=notes, history=history,
+                    address=address, retain_stable=retain_stable, correction=correction,
+                    mode=mode, action_history=action_history,
+                )
+                if selected is None:
+                    logger.emit("errors", {
+                        "record_id": rid, "modules": [module],
+                        "reason": "独立模块两轮校验未通过",
+                        "errors": isolated_errors,
+                    })
+                    event(rid, module, "validation_failed", errors=isolated_errors[:5])
+                    with stats_lock:
+                        stats["errors"] += 1
+                    print(f"[{rid}][{module}] validation_failed", flush=True)
+                    return
+
+                event(rid, module, "primary_validated")
+                selected_by_module, review_issues, review_usages = review_candidates(
+                    selected, tr, [module], identity, args.model,
+                    args.temperature, args.review, notes=notes,
+                    address=address, retain_stable=retain_stable, correction=correction,
+                    mode=mode, action_history=action_history,
+                )
+                usages.extend(review_usages)
+                if review_issues and args.review_policy == "strict":
+                    logger.emit("manual", {
+                        "record_id": rid, "modules": [module],
+                        "reason": "风险复核未收敛", "details": review_issues,
+                    })
+                    event(rid, module, "review_disputed", details=review_issues)
+                    with stats_lock:
+                        stats["manual"] += 1
+                    print(f"[{rid}][{module}] review_disputed", flush=True)
+                    return
+                if review_issues:
+                    event(
+                        rid, module, "review_fallback_primary",
+                        details=review_issues,
+                    )
+                    print(f"[{rid}][{module}] review_fallback_primary", flush=True)
+
+                payload = render_module(
+                    module, selected_by_module[module], tr, identity, rid, history_date, mode,
+                    action_history, _closure_field_of(profile),
+                )
+                event(rid, module, "ready_to_write", fields=list(payload))
+                if not args.dry_run:
+                    with write_lock:
+                        update_record(base, table, rid, payload)
+                if module == "store-profile" and not args.dry_run:
+                    try:
+                        master_result = sync_master_profile(
+                            profile, row, payload[MODULE_FIELDS["store-profile"][0]]
                         )
-                        event(rid, module, "history_found", details={"count": len(found)})
-                else:
-                    found = find_history_profile(profile, master_rid, rid)
-                    if found:
-                        history_date, history_text = found
-                        history = f"进店时间：{history_date}\n{history_text}"
-                        event(rid, module, "history_found", details={"date": history_date})
-        elif module == "next-action" and mode == "daily":
-            master_rid = master_record_id_of(row, profile)
-            if master_rid:
-                found = find_last_actions(profile, master_rid, rid)
-                if found:
-                    action_text, closure_text = found
-                    action_history = f"上次下一步行动策略：\n{action_text}"
-                    if closure_text:
-                        action_history += f"\n\n上次总结闭环：\n{closure_text}"
-                    event(rid, module, "action_history_found")
-        retain_stable = bool(history) or bool(address)
-        event(rid, module, "started")
-        print(f"[{rid}][{module}] started (mode={mode})", flush=True)
-        try:
-            tr = parse_transcript(cell_text(row[profile["source_field"]]))
-            selected, usages, isolated_errors = analyze(
-                tr, module, identity, args.model, args.temperature, notes=notes, history=history,
-                address=address, retain_stable=retain_stable, correction=correction,
-                mode=mode, action_history=action_history,
-            )
-            if selected is None:
-                logger.emit("errors", {
-                    "record_id": rid, "modules": [module],
-                    "reason": "独立模块两轮校验未通过",
-                    "errors": isolated_errors,
+                        event(rid, module, "master_synced", details=master_result)
+                        print(
+                            f"[{rid}][store-profile] master_synced="
+                            f"{len(master_result['fields'])}字段",
+                            flush=True,
+                        )
+                    except Exception as exc:
+                        event(rid, module, "master_sync_failed", reason=str(exc))
+                        print(
+                            f"[{rid}][store-profile] master_sync_failed: {str(exc)[:120]}",
+                            flush=True,
+                        )
+                logger.emit("done", {
+                    "record_id": rid,
+                    "modules": [module],
+                    "dry_run": args.dry_run,
+                    "fields": payload,
+                    "usage": usages,
+                    "review_issues": review_issues,
+                    "review_policy": args.review_policy,
+                    "knowledge_refs": kb.collect_knowledge_refs(selected_by_module[module]),
                 })
-                event(rid, module, "validation_failed", errors=isolated_errors[:5])
+                event(rid, module, "dry_run" if args.dry_run else "written")
+                with stats_lock:
+                    stats["done"] += 1
+                print(
+                    f"[{rid}][{module}] {'dry-run' if args.dry_run else 'written'}",
+                    flush=True,
+                )
+            except Exception as exc:
+                logger.emit("errors", {
+                    "record_id": rid, "modules": [module], "reason": str(exc),
+                })
+                event(rid, module, "exception", reason=str(exc))
                 with stats_lock:
                     stats["errors"] += 1
-                print(f"[{rid}][{module}] validation_failed", flush=True)
-                return
+                print(f"[{rid}][{module}] exception: {str(exc)[:160]}", flush=True)
 
-            event(rid, module, "primary_validated")
-            selected_by_module, review_issues, review_usages = review_candidates(
-                selected, tr, [module], identity, args.model,
-                args.temperature, args.review, notes=notes,
-                address=address, retain_stable=retain_stable, correction=correction,
-                mode=mode, action_history=action_history,
-            )
-            usages.extend(review_usages)
-            if review_issues and args.review_policy == "strict":
-                logger.emit("manual", {
-                    "record_id": rid, "modules": [module],
-                    "reason": "风险复核未收敛", "details": review_issues,
-                })
-                event(rid, module, "review_disputed", details=review_issues)
-                with stats_lock:
-                    stats["manual"] += 1
-                print(f"[{rid}][{module}] review_disputed", flush=True)
-                return
-            if review_issues:
-                event(
-                    rid, module, "review_fallback_primary",
-                    details=review_issues,
-                )
-                print(f"[{rid}][{module}] review_fallback_primary", flush=True)
+        finally:
+            if lock:
+                lock.release()
 
-            payload = render_module(
-                module, selected_by_module[module], tr, identity, rid, history_date, mode
-            )
-            event(rid, module, "ready_to_write", fields=list(payload))
-            if not args.dry_run:
-                with write_lock:
-                    update_record(base, table, rid, payload)
-            if module == "store-profile" and not args.dry_run:
-                try:
-                    master_result = sync_master_profile(
-                        profile, row, payload[MODULE_FIELDS["store-profile"][0]]
-                    )
-                    event(rid, module, "master_synced", details=master_result)
-                    print(
-                        f"[{rid}][store-profile] master_synced="
-                        f"{len(master_result['fields'])}字段",
-                        flush=True,
-                    )
-                except Exception as exc:
-                    event(rid, module, "master_sync_failed", reason=str(exc))
-                    print(
-                        f"[{rid}][store-profile] master_sync_failed: {str(exc)[:120]}",
-                        flush=True,
-                    )
-            logger.emit("done", {
-                "record_id": rid,
-                "modules": [module],
-                "dry_run": args.dry_run,
-                "fields": payload,
-                "usage": usages,
-                "review_issues": review_issues,
-                "review_policy": args.review_policy,
-                "knowledge_refs": kb.collect_knowledge_refs(selected_by_module[module]),
-            })
-            event(rid, module, "dry_run" if args.dry_run else "written")
-            with stats_lock:
-                stats["done"] += 1
-            print(
-                f"[{rid}][{module}] {'dry-run' if args.dry_run else 'written'}",
-                flush=True,
-            )
-        except Exception as exc:
-            logger.emit("errors", {
-                "record_id": rid, "modules": [module], "reason": str(exc),
-            })
-            event(rid, module, "exception", reason=str(exc))
-            with stats_lock:
-                stats["errors"] += 1
-            print(f"[{rid}][{module}] exception: {str(exc)[:160]}", flush=True)
+
 
     try:
         for row, module in module_jobs:

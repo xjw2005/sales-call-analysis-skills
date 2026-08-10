@@ -25,6 +25,16 @@
    "master_history_days": 3,
    "stage_field": "拜访阶段",
    "first_stage_choice": "首访破冰",
+   "daily_stage_choices": [
+    "需求确认",
+    "方案讲解",
+    "异议处理",
+    "促成签约",
+    "交付培训",
+    "日常维护",
+    "复活挽回",
+    "确定联合推广"
+   ],
    "closure_field": "上一次行动与这一次行动总结闭环",
    "history_profiles": 3,
    "history_actions": 1,

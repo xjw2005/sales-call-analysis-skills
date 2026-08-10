@@ -770,9 +770,18 @@ def main():
 
     # ---- 日常拜访模式 ----
     assert p.DAILY_MODULES == ["explicit-needs", "concerns", "store-profile", "next-action"]
-    assert p.visit_mode({"拜访阶段": "首访破冰"}, {"stage_field": "拜访阶段", "first_stage_choice": "首访破冰"}) == "first"
+    profile_stage = {
+        "stage_field": "拜访阶段", "first_stage_choice": "首访破冰",
+        "daily_stage_choices": ["日常维护", "促成签约"],
+    }
+    assert p.visit_mode({"拜访阶段": "首访破冰"}, profile_stage) == "first"
+    assert p.visit_mode({"拜访阶段": "日常维护"}, profile_stage) == "daily"
+    assert p.visit_mode({"拜访阶段": "促成签约"}, profile_stage) == "daily"
+    assert p.visit_mode({}, profile_stage) == "first"
+    # 未知阶段（拼写错误/新选项）→ unknown，调用方跳过不静默按日常
+    assert p.visit_mode({"拜访阶段": "需求确任"}, profile_stage) == "unknown"
+    # 未配置白名单时保持旧行为（非首访即日常）
     assert p.visit_mode({"拜访阶段": "日常维护"}, {"stage_field": "拜访阶段", "first_stage_choice": "首访破冰"}) == "daily"
-    assert p.visit_mode({}, {"stage_field": "拜访阶段", "first_stage_choice": "首访破冰"}) == "first"
 
     daily_next = {
         "closure": {
@@ -807,11 +816,20 @@ def main():
         "_scope": {"input_quality": "可用", "quality_reason": "", "role_corrections": [], "exclusions": []},
         "next-action": daily_next,
     }
-    errors, _ = p.validate_candidate(daily_candidate, tr, ["next-action"], mode="daily")
+    errors, _ = p.validate_candidate(
+        daily_candidate, tr, ["next-action"], mode="daily",
+        action_history="上次行动：确认报价单；推进首单",
+    )
     assert not errors, errors
+    # 无历史行动时 items 必须为空（防编造上次行动）
+    no_history = copy.deepcopy(daily_candidate)
+    errors, _ = p.validate_candidate(
+        no_history, tr, ["next-action"], mode="daily", action_history="",
+    )
+    assert errors and any("不得编造上次行动" in error for error in errors)
     rendered_daily = p.render_module(
         "next-action", p.split_candidate(daily_candidate, "next-action"), tr, {}, "rec_test",
-        mode="daily",
+        mode="daily", action_history="上次行动：确认报价单；推进首单",
     )
     assert "上一次行动与这一次行动总结闭环" in rendered_daily
     assert "下一步行动策略" in rendered_daily
@@ -821,12 +839,13 @@ def main():
     assert "是否达成合作" not in rendered_daily
     # 闭环签名（复核机制）
     sig = p.module_signature("next-action", daily_candidate)
-    assert sig[0] and sig[1] == "触发"
+    assert sig[0] and sig[2] == "触发"  # (summary, closure_items, action_judgment, ...)
     # 未完成无原因 → 报错
     bad_daily = copy.deepcopy(daily_next)
     bad_daily["closure"]["items"][1]["reason"] = ""
     errors, _ = p.validate_candidate(
         {"_scope": daily_candidate["_scope"], "next-action": bad_daily}, tr, ["next-action"], mode="daily",
+        action_history="上次行动：确认报价单",
     )
     assert errors and any("reason不能为空" in error for error in errors)
     # 已完成无证据 → 报错
@@ -834,6 +853,7 @@ def main():
     bad2["closure"]["items"][0]["evidence_ids"] = []
     errors, _ = p.validate_candidate(
         {"_scope": daily_candidate["_scope"], "next-action": bad2}, tr, ["next-action"], mode="daily",
+        action_history="上次行动：确认报价单",
     )
     assert errors and any("至少需要1个" in error for error in errors)
     # action_history 注入
