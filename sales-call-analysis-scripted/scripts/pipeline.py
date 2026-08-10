@@ -2552,13 +2552,22 @@ def main() -> int:
             elif module == "next-action" and mode == "daily":
                 master_rid = master_record_id_of(row, profile)
                 if master_rid:
-                    found = find_last_actions(
+                    current_date = row.get(profile.get("master_date_field"))
+                    # 门店背景：前 history_profiles 次档案（与 store-profile 日常版一致）
+                    found_profiles = find_history_profiles(
                         profile, master_rid, rid,
-                        current_date=row.get(profile.get("master_date_field")),
+                        limit=int(profile.get("history_profiles", 3)),
+                        current_date=current_date,
                     )
+                    if found_profiles:
+                        action_history += "该门店历史门店档案（门店背景参考）：\n" + "\n\n".join(
+                            f"进店时间：{date}\n{text}" for date, text in found_profiles
+                        ) + "\n\n"
+                        event(rid, module, "profile_history_found", details={"count": len(found_profiles)})
+                    found = find_last_actions(profile, master_rid, rid, current_date=current_date)
                     if found:
                         action_text, closure_text = found
-                        action_history = f"上次下一步行动策略：\n{action_text}"
+                        action_history += f"上次下一步行动策略：\n{action_text}"
                         if closure_text:
                             action_history += f"\n\n上次总结闭环：\n{closure_text}"
                         event(rid, module, "action_history_found")
