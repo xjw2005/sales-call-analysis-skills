@@ -36,6 +36,9 @@ PROMPT_FILES = {
         "effectiveness", "quotes", "store-profile", "next-action",
     )
 }
+# 日常拜访模式专用提示词（拜访阶段 ≠ 首访破冰 时使用）
+PROMPT_FILES["store-profile-daily"] = PROMPT_DIR / "store-profile-daily.md"
+PROMPT_FILES["next-action-daily"] = PROMPT_DIR / "next-action-daily.md"
 
 MODULE_FIELDS = {
     "explicit-needs": ["显性需求(仅供参考)", "显性需求_原句参考"],
@@ -44,9 +47,11 @@ MODULE_FIELDS = {
     "effectiveness": ["合作进展打分评估", "原句参考_合作进展打分评估"],
     "quotes": ["核心金句"],
     "store-profile": ["门店档案", "门店档案-原文证据"],
-    "next-action": ["下一步行动策略", "是否达成合作"],
+    "next-action": ["下一步行动策略", "是否达成合作", "上一次行动与这一次行动总结闭环"],
 }
 ALL_MODULES = list(MODULE_FIELDS)
+# 日常拜访模式保留的模块：显性需求、关心类目、门店档案、闭环+下一步行动
+DAILY_MODULES = ["explicit-needs", "concerns", "store-profile", "next-action"]
 MODULE_ALIASES = {"needs": ["explicit-needs", "implicit-needs"]}
 CONCERN_NAMES = [
     "价格敏感", "物流时效", "控价防窜", "培训支持", "售后保障",
@@ -396,8 +401,16 @@ def sanitize_candidate(
     tr: Transcript,
     modules: list[str],
     identity: dict[str, str] | None = None,
+    known_address: str = "",
+    retain_stable: bool = False,
 ) -> dict[str, Any]:
-    """只做保守修正：删无效金句/非未来行动；无客户证据的档案项降为未确认。"""
+    """只做保守修正：删无效金句/非未来行动；无客户证据的档案项降为未确认。
+
+    known_address: 注入的主档地址文本，其中的省/市/区 token 视为已知事实，
+                   不因证据中未出现而被判为编造。
+    retain_stable: 本次注入了历史档案或主档地址时，允许「稳定档案+空证据」
+                   保留（历史保留项/主档已知事实，与 validate_store_profile 放行一致）。
+    """
     scope_errors: list[str] = []
     ctx = validate_scope(candidate.get("_scope", {}), tr, scope_errors)
     if scope_errors:
@@ -432,6 +445,15 @@ def sanitize_candidate(
 
     if "store-profile" in modules and isinstance(candidate.get("store-profile"), dict):
         profile = candidate["store-profile"]
+        known_tokens = (
+            set(unsupported_named_tokens(known_address, "")) if known_address else set()
+        )
+
+        def named_ok(content: str, source: str) -> bool:
+            return not [
+                token for token in unsupported_named_tokens(content, source)
+                if token not in known_tokens
+            ]
 
         def clean_profile_text(text: Any, *, remove_sales_sentences: bool = False) -> str:
             cleaned = re.sub(
@@ -457,11 +479,15 @@ def sanitize_candidate(
                 if item.get("state_type") == "未确认":
                     item["content"] = "未确认"
                     item["evidence_ids"] = []
-                elif ids and not unsupported_named_tokens(
+                elif ids and named_ok(
                     str(item.get("content", "")),
                     "".join(by_id[uid].text for uid in ids),
                 ):
                     item["evidence_ids"] = ids
+                elif (retain_stable or known_tokens) and item.get("state_type") == "稳定档案" and not ids:
+                    # 注入了历史档案/主档地址：稳定档案允许无本次证据
+                    # （历史保留项/主档已知事实，validate_store_profile 放行一致）
+                    item["evidence_ids"] = []
                 else:
                     item["content"] = "未确认"
                     item["state_type"] = "未确认"
@@ -477,7 +503,7 @@ def sanitize_candidate(
         )
         if (
             one_line_ids
-            and not unsupported_named_tokens(profile["one_line"], one_line_source)
+            and named_ok(profile["one_line"], one_line_source)
             and not unsupported_identity
         ):
             profile["one_line_evidence_ids"] = one_line_ids
@@ -831,10 +857,123 @@ def validate_next_action(
             errors.append("行动判断为不触发时二次拜访价值不得为值得")
 
 
+def validate_next_action_daily(
+    value: Any,
+    tr: Transcript,
+    ctx: EvidenceContext,
+    errors: list[str],
+) -> None:
+    """日常模式 next-action：闭环（上次行动完成情况）+ 行动策略（不判合作状态）。"""
+    keys = {
+        "closure", "action_judgment", "judgment_reason",
+        "confirmed_actions", "recommended_actions", "second_visit",
+    }
+    if not require_keys(value, keys, "next-action", errors):
+        return
+
+    closure = value["closure"]
+    if not isinstance(closure, dict):
+        errors.append("next-action.closure必须是对象")
+        return
+    if not require_keys(closure, {"summary", "items"}, "总结闭环", errors):
+        return
+    if not nonempty(closure["summary"]):
+        errors.append("总结闭环.summary不能为空")
+    if re.search(r"U\d{4}", str(closure["summary"])):
+        errors.append("总结闭环.summary不得直接展示发言ID")
+    items = closure["items"]
+    if not isinstance(items, list) or len(items) > 3:
+        errors.append("总结闭环.items必须为0至3条")
+    else:
+        for i, item in enumerate(items, 1):
+            label = f"闭环{i}"
+            if not require_keys(item, {"action", "done", "evidence_ids", "reason"}, label, errors):
+                continue
+            if not nonempty(item["action"]):
+                errors.append(f"{label}.action不能为空")
+            if re.search(r"U\d{4}", str(item["action"])):
+                errors.append(f"{label}.action不得直接展示发言ID")
+            if item["done"] not in {"已完成", "未完成", "部分完成"}:
+                errors.append(f"{label}.done只能为已完成/未完成/部分完成")
+            elif item["done"] == "已完成":
+                validate_ids(item["evidence_ids"], tr, ctx, errors, label)
+            else:
+                if not nonempty(item.get("reason")):
+                    errors.append(f"{label}.reason不能为空（未完成需说明原因）")
+                if item["evidence_ids"]:
+                    validate_ids(item["evidence_ids"], tr, ctx, errors, label, minimum=0)
+
+    judgment = value["action_judgment"]
+    if judgment not in {"触发", "不触发", "待验证"}:
+        errors.append("next-action.action_judgment只能为触发/不触发/待验证")
+    if not nonempty(value["judgment_reason"]):
+        errors.append("next-action.judgment_reason不能为空")
+    if re.search(r"U\d{4}", str(value["judgment_reason"])):
+        errors.append("next-action.judgment_reason不得直接展示发言ID")
+
+    confirmed = value["confirmed_actions"]
+    if not isinstance(confirmed, list) or len(confirmed) > 3:
+        errors.append("next-action.confirmed_actions必须为0至3条")
+    else:
+        action_keys = {"owner", "timeframe", "action", "evidence_ids"}
+        for i, item in enumerate(confirmed, 1):
+            label = f"已确认行动{i}"
+            if not require_keys(item, action_keys, label, errors):
+                continue
+            if item["owner"] not in {"销售", "客户", "双方"}:
+                errors.append(f"{label}.owner只能为销售/客户/双方")
+            for key in ("timeframe", "action"):
+                if not nonempty(item[key]):
+                    errors.append(f"{label}.{key}不能为空")
+                if re.search(r"U\d{4}", str(item[key])):
+                    errors.append(f"{label}.{key}不得直接展示发言ID")
+            validate_ids(item["evidence_ids"], tr, ctx, errors, label)
+
+    recommended = value["recommended_actions"]
+    if not isinstance(recommended, list) or len(recommended) > 3:
+        errors.append("next-action.recommended_actions必须为0至3条")
+    else:
+        action_keys = {
+            "topic", "owner", "timeframe", "action", "reason",
+            "acceptance", "evidence_ids",
+        }
+        for i, item in enumerate(recommended, 1):
+            label = f"建议行动{i}"
+            if not require_keys(item, action_keys, label, errors):
+                continue
+            if item["owner"] not in {"销售", "区域经理", "双方"}:
+                errors.append(f"{label}.owner只能为销售/区域经理/双方")
+            for key in ("topic", "timeframe", "action", "reason", "acceptance"):
+                if not nonempty(item[key]):
+                    errors.append(f"{label}.{key}不能为空")
+                if re.search(r"U\d{4}", str(item[key])):
+                    errors.append(f"{label}.{key}不得直接展示发言ID")
+            validate_ids(item["evidence_ids"], tr, ctx, errors, label)
+
+    if isinstance(confirmed, list) and isinstance(recommended, list):
+        has_actions = bool(confirmed or recommended)
+        if judgment == "触发" and not has_actions:
+            errors.append("行动判断为触发时至少需要一条已确认事项或建议行动")
+        if judgment in {"不触发", "待验证"} and has_actions:
+            errors.append(f"行动判断为{judgment}时不得输出已确认事项或建议行动")
+
+    second = value["second_visit"]
+    if not require_keys(second, {"value", "reason", "evidence_ids"}, "二次拜访判断", errors):
+        return
+    if second["value"] not in {"值得", "暂缓", "不建议", "无法判断", "不适用"}:
+        errors.append("二次拜访价值只能为值得/暂缓/不建议/无法判断/不适用")
+    if not nonempty(second["reason"]):
+        errors.append("二次拜访判断.reason不能为空")
+    if re.search(r"U\d{4}", str(second["reason"])):
+        errors.append("二次拜访判断.reason不得直接展示发言ID")
+    validate_ids(second["evidence_ids"], tr, ctx, errors, "二次拜访判断", minimum=0)
+
+
 def validate_candidate(
     candidate: Any,
     tr: Transcript,
     modules: list[str],
+    mode: str = "first",
 ) -> tuple[list[str], EvidenceContext]:
     errors: list[str] = []
     if not isinstance(candidate, dict):
@@ -860,7 +999,10 @@ def validate_candidate(
         elif module == "store-profile":
             validate_store_profile(value, tr, ctx, errors)
         elif module == "next-action":
-            validate_next_action(value, tr, ctx, errors)
+            if mode == "daily":
+                validate_next_action_daily(value, tr, ctx, errors)
+            else:
+                validate_next_action(value, tr, ctx, errors)
     return errors, ctx
 
 
@@ -995,6 +1137,14 @@ def render_quotes(value: dict[str, Any], tr: Transcript, ctx: EvidenceContext) -
     return {"核心金句": "\n\n".join(blocks) or "未识别到证据充分且可复用的销售金句。"}
 
 
+def visit_mode(row: dict[str, Any], profile: dict[str, Any]) -> str:
+    """按「拜访阶段」分流：等于首访破冰（或未填）→ first；其他阶段 → daily。"""
+    stage = cell_text(row.get(profile.get("stage_field", ""))).strip()
+    if stage and stage != profile.get("first_stage_choice", "首访破冰"):
+        return "daily"
+    return "first"
+
+
 def master_record_id_of(row: dict[str, Any], profile: dict[str, Any]) -> str | None:
     """从 02 表行取「关联门店」link 指向的 01 主档记录 ID。
 
@@ -1007,6 +1157,38 @@ def master_record_id_of(row: dict[str, Any], profile: dict[str, Any]) -> str | N
             return str(item.get("id") or "")
         return str(item)
     return None
+
+
+def read_master_address(profile: dict[str, Any], master_rid: str) -> str:
+    """读 01 主档地址字段，拼成已知事实文本；未配置或读取失败返回空串。
+
+    address_fields 按序为 [省, 详细地址]；详细地址已含省时不重复拼。
+    """
+    fields = profile.get("address_fields", [])
+    if not fields or not master_rid:
+        return ""
+    try:
+        args = ["base", "+record-get",
+                "--base-token", profile["base"],
+                "--table-id", profile["master_table"],
+                "--record-id", master_rid]
+        for field in fields:
+            args.extend(["--field-id", field])
+        data = lark(*args)
+    except RuntimeError:
+        return ""
+    rows = rows_of(data)
+    if not rows:
+        return ""
+    parts = [cell_text(rows[0].get(field)).strip() for field in fields]
+    parts = [part for part in parts if part]
+    if not parts:
+        return ""
+    province, detail = parts[0], parts[-1]
+    if province and (detail.startswith(province) or detail.startswith(province[:-1])):
+        # 详细地址已含省名（含「省」字或省名本身）时不重复拼
+        return detail
+    return " ".join(parts)
 
 
 def parse_profile_text(text: str) -> dict[str, str]:
@@ -1050,13 +1232,17 @@ def within_history_days(value: Any, days: int) -> bool:
     return (datetime.now() - parsed).days <= days
 
 
-def find_history_profile(
-    profile: dict[str, Any], master_rid: str, exclude_rid: str,
-) -> tuple[str, str] | None:
-    """02 表查该门店前 history_days 天内、进店时间最近且档案非空的一条。
+def find_history_profiles(
+    profile: dict[str, Any],
+    master_rid: str,
+    exclude_rid: str,
+    limit: int = 1,
+    within_days: int | None = None,
+) -> list[tuple[str, str]]:
+    """02 表查该门店进店时间最近的、档案非空的门店档案（最多 limit 份）。
 
-    返回 (进店时间原文, 门店档案正文)；无则 None。只读「门店档案」精简正文，
-    不读「门店档案-原文证据」（省 token）。
+    返回 [(进店时间原文, 档案正文), ...]；within_days 非空时只取该天数内的
+    （最近一份超窗即停止）。只读「门店档案」精简正文，不读证据字段（省 token）。
     """
     filter_json = json.dumps(
         {
@@ -1069,13 +1255,13 @@ def find_history_profile(
         [{"field": profile["master_date_field"], "desc": True}], ensure_ascii=False
     )
     profile_field = MODULE_FIELDS["store-profile"][0]
-    days = int(profile.get("master_history_days", 3))
     data = lark(
         "base", "+record-list", "--base-token", profile["base"], "--table-id", profile["table"],
         "--filter-json", filter_json, "--sort-json", sort_json,
         "--field-id", profile["master_date_field"], "--field-id", profile_field,
         "--limit", "200",
     )
+    found: list[tuple[str, str]] = []
     for row in rows_of(data):
         if row["_record_id"] == exclude_rid:
             continue
@@ -1083,9 +1269,57 @@ def find_history_profile(
         if not text:
             continue
         date_value = row.get(profile["master_date_field"])
-        if date_value and not within_history_days(date_value, days):
-            return None  # 最近一条已超 3 天，更早的不再看
-        return cell_text(date_value), text
+        if within_days is not None and date_value and not within_history_days(date_value, within_days):
+            break  # 最近一条已超窗口，更早的不再看
+        found.append((cell_text(date_value), text))
+        if len(found) >= limit:
+            break
+    return found
+
+
+def find_history_profile(
+    profile: dict[str, Any], master_rid: str, exclude_rid: str,
+) -> tuple[str, str] | None:
+    """首访模式：前 history_days 天内最近一条非空档案（保持原语义）。"""
+    found = find_history_profiles(
+        profile, master_rid, exclude_rid,
+        limit=1, within_days=int(profile.get("master_history_days", 3)),
+    )
+    return found[0] if found else None
+
+
+def find_last_actions(
+    profile: dict[str, Any], master_rid: str, exclude_rid: str,
+) -> tuple[str, str] | None:
+    """日常模式：该门店最近一次拜访的「下一步行动策略」+「总结闭环」。
+    返回 (行动策略正文, 闭环正文)；闭环可能为空串；无任何历史行动则 None。
+    """
+    action_field = MODULE_FIELDS["next-action"][0]
+    closure_field = MODULE_FIELDS["next-action"][-1]
+    filter_json = json.dumps(
+        {
+            "logic": "and",
+            "conditions": [[profile["master_link_field"], "intersects", [master_rid]]],
+        },
+        ensure_ascii=False,
+    )
+    sort_json = json.dumps(
+        [{"field": profile["master_date_field"], "desc": True}], ensure_ascii=False
+    )
+    data = lark(
+        "base", "+record-list", "--base-token", profile["base"], "--table-id", profile["table"],
+        "--filter-json", filter_json, "--sort-json", sort_json,
+        "--field-id", profile["master_date_field"],
+        "--field-id", action_field, "--field-id", closure_field,
+        "--limit", "200",
+    )
+    for row in rows_of(data):
+        if row["_record_id"] == exclude_rid:
+            continue
+        action_text = cell_text(row.get(action_field)).strip()
+        if not action_text:
+            continue
+        return action_text, cell_text(row.get(closure_field)).strip()
     return None
 
 
@@ -1152,18 +1386,11 @@ def render_store_profile(
     return payload
 
 
-def render_next_action(
-    value: dict[str, Any], tr: Transcript, ctx: EvidenceContext,
-) -> dict[str, Any]:
-    status = value["cooperation_status"]
-    lines = [
-        f"合作状态判定：{status}",
-        f"行动判断：{value['action_judgment']}",
-        f"判断原因：{value['judgment_reason']}",
-    ]
-
+def _render_action_sections(value: dict[str, Any]) -> str:
+    """已确认事项 + 建议行动 + 二次拜访判断 的展示正文（首访/日常共用）。"""
+    lines: list[str] = []
     confirmed = value["confirmed_actions"]
-    lines.append("\n已确认的后续事项：")
+    lines.append("已确认的后续事项：")
     if not confirmed:
         lines.append("无明确约定。")
     for i, item in enumerate(confirmed, 1):
@@ -1189,9 +1416,49 @@ def render_next_action(
     second = value["second_visit"]
     if second["value"] != "不适用":
         lines.append(f"\n二次拜访价值：{second['value']}\n建议：{second['reason']}")
+    return "\n".join(lines)
+
+
+def render_next_action(
+    value: dict[str, Any], tr: Transcript, ctx: EvidenceContext,
+) -> dict[str, Any]:
+    status = value["cooperation_status"]
+    lines = [
+        f"合作状态判定：{status}",
+        f"行动判断：{value['action_judgment']}",
+        f"判断原因：{value['judgment_reason']}",
+    ]
+    lines.append(_render_action_sections(value))
     return {
         "下一步行动策略": "\n".join(lines),
         "是否达成合作": "是" if status == "已合作" else "否",
+    }
+
+
+def render_next_action_daily(
+    value: dict[str, Any], tr: Transcript, ctx: EvidenceContext,
+) -> dict[str, Any]:
+    """日常模式：一次输出「总结闭环」+「下一步行动策略」两个字段。"""
+    closure = value["closure"]
+    closure_lines = [f"本次行动总结：{closure['summary']}"]
+    closure_lines.append("\n上次行动完成情况：")
+    items = closure["items"]
+    if not items:
+        closure_lines.append("无上次行动记录。")
+    for i, item in enumerate(items, 1):
+        done = item["done"]
+        line = f"{i}. 【{done}】{item['action']}"
+        if not nonempty(item.get("reason")) and done != "已完成":
+            line += f"；原因：{item['reason']}"
+        closure_lines.append(line)
+    action_lines = [
+        f"行动判断：{value['action_judgment']}",
+        f"判断原因：{value['judgment_reason']}",
+    ]
+    action_lines.append(_render_action_sections(value))
+    return {
+        "上一次行动与这一次行动总结闭环": "\n".join(closure_lines),
+        "下一步行动策略": "\n".join(action_lines),
     }
 
 
@@ -1202,8 +1469,9 @@ def render_module(
     identity: dict[str, str],
     record_id: str,
     history_date: str = "",
+    mode: str = "first",
 ) -> dict[str, Any]:
-    errors, ctx = validate_candidate(candidate, tr, [module])
+    errors, ctx = validate_candidate(candidate, tr, [module], mode)
     if errors:
         raise ValueError("渲染前校验失败: " + "；".join(errors))
     if module == "explicit-needs":
@@ -1220,6 +1488,8 @@ def render_module(
         payload = render_store_profile(
             candidate[module], tr, ctx, identity, record_id, history_date
         )
+    elif module == "next-action" and mode == "daily":
+        payload = render_next_action_daily(candidate[module], tr, ctx)
     else:
         payload = render_next_action(candidate[module], tr, ctx)
     # 飞书可见正文剥离知识引用标记；引用全量留在事件/完成日志供审计
@@ -1292,10 +1562,12 @@ def extract_json(text: str) -> dict[str, Any]:
     return value
 
 
-def system_prompt(module: str) -> str:
-    path = PROMPT_FILES.get(module)
+def system_prompt(module: str, mode: str = "first") -> str:
+    """按模式选提示词：日常拜访用 daily 专用版（store-profile/next-action）。"""
+    prompt_key = f"{module}-daily" if mode == "daily" and f"{module}-daily" in PROMPT_FILES else module
+    path = PROMPT_FILES.get(prompt_key)
     if path is None:
-        raise ValueError(f"模块没有专属提示词: {module}")
+        raise ValueError(f"模块没有专属提示词: {prompt_key}")
     block = kb.knowledge_block_for(module)
     module_prompt = path.read_text(encoding="utf-8")
     if not block:
@@ -1311,6 +1583,9 @@ def build_user_message(
     candidates: tuple[dict[str, Any], dict[str, Any]] | None = None,
     notes: str = "",
     history: str = "",
+    address: str = "",
+    correction: str = "",
+    action_history: str = "",
 ) -> str:
     hard_rules = {
         "concerns": f"九类白名单={json.dumps(CONCERN_NAMES, ensure_ascii=False)}",
@@ -1320,9 +1595,30 @@ def build_user_message(
     history_block = ""
     if module == "store-profile" and history:
         history_block = (
-            "该门店前3天内最近一次拜访的门店档案（动态更新依据：前次确认且本次未提及的事实保留；"
+            "该门店历史拜访的门店档案（动态更新依据：前次确认且本次未提及的事实保留；"
             "前次待核验本次有新证据则确认；与本次新证据冲突时以本次为准；"
             "前次结论仍可被本次证据推翻）：\n" + history + "\n\n"
+        )
+    action_history_block = ""
+    if module == "next-action" and action_history:
+        action_history_block = (
+            "该门店前一次拜访的下一步行动策略与总结闭环（本次需判断上次行动是否完成，"
+            "并基于闭环结果输出本次的下一步行动）：\n" + action_history + "\n\n"
+        )
+    correction_block = ""
+    if module == "store-profile" and correction:
+        correction_block = (
+            "门店档案纠正（DSR人工填写，权威性高于现场速记与转写；用于补充或修正门店事实，"
+            "与转写冲突时以纠正为准；行动推进类信息不属于档案维度，不写入档案正文；"
+            "纠正非客户原话，原句引用仍只能来自带时间戳的转写）：\n"
+            + correction + "\n\n"
+        )
+    address_block = ""
+    if module == "store-profile" and address:
+        address_block = (
+            "门店地址（来源：门店主档清单，为可信已知事实，无需录音证据支持；"
+            "写入门店基本信息时可直接引用，证据留空、state_type 用 稳定档案）：\n"
+            + address + "\n\n"
         )
     message = (
         f"本次唯一任务：{module}。\n"
@@ -1334,7 +1630,10 @@ def build_user_message(
             "速记非客户原话，原句引用仍只能来自带时间戳的转写）：\n" + notes + "\n\n"
             if notes else ""
         )
+        + correction_block
+        + address_block
         + history_block
+        + action_history_block
         + "完整转写（必须完整阅读）：\n" + tr.model_text()
     )
     if errors:
@@ -1359,6 +1658,11 @@ def analyze(
     candidates: tuple[dict[str, Any], dict[str, Any]] | None = None,
     notes: str = "",
     history: str = "",
+    address: str = "",
+    retain_stable: bool = False,
+    correction: str = "",
+    mode: str = "first",
+    action_history: str = "",
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[str]]:
     usages: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -1366,10 +1670,11 @@ def analyze(
     attempts = 1 if candidates else 2
     for attempt in range(attempts):
         output, usage = call_llm(
-            system_prompt(module),
+            system_prompt(module, mode),
             build_user_message(
                 tr, module, identity,
-                errors if attempt else None, candidates, notes, history,
+                errors if attempt else None, candidates, notes, history, address, correction,
+                action_history,
             ),
             model,
             temperature,
@@ -1380,8 +1685,11 @@ def analyze(
         except (ValueError, json.JSONDecodeError) as exc:
             errors = [f"输出不是合法JSON: {exc}"]
             continue
-        last = sanitize_candidate(last, tr, [module], identity)
-        errors, _ = validate_candidate(last, tr, [module])
+        last = sanitize_candidate(
+            last, tr, [module], identity,
+            known_address=address, retain_stable=retain_stable,
+        )
+        errors, _ = validate_candidate(last, tr, [module], mode)
         if not errors and kb.knowledge_block_for(module):
             bad_refs = kb.validate_knowledge_refs(last, kb.injected_ids(module))
             if bad_refs:
@@ -1418,6 +1726,17 @@ def module_signature(module: str, candidate: dict[str, Any]) -> Any:
                 (key, item["state_type"], tuple(sorted(item["evidence_ids"])))
                 for key, item in value["sections"].items()
             )),
+        )
+    if "closure" in value:
+        # 日常模式：闭环骨架 + 行动判断 + 建议行动证据
+        return (
+            tuple(sorted(
+                (item["action"], item["done"], tuple(sorted(item["evidence_ids"])))
+                for item in value["closure"]["items"]
+            )),
+            value["action_judgment"],
+            tuple(sorted(tuple(sorted(x["evidence_ids"])) for x in value["recommended_actions"])),
+            value["second_visit"]["value"],
         )
     return (
         value["cooperation_status"],
@@ -1471,6 +1790,11 @@ def review_candidates(
     temperature: float,
     review_mode: str,
     notes: str = "",
+    address: str = "",
+    retain_stable: bool = False,
+    correction: str = "",
+    mode: str = "first",
+    action_history: str = "",
 ) -> tuple[dict[str, dict[str, Any]], list[str], list[dict[str, Any]]]:
     """对风险模块做独立双跑；分歧时用第三次独立结果做多数裁决。
 
@@ -1486,7 +1810,11 @@ def review_candidates(
     for module in modules:
         if module not in to_review:
             continue
-        second, usage2, errors2 = analyze(tr, module, identity, model, temperature, notes=notes)
+        second, usage2, errors2 = analyze(
+            tr, module, identity, model, temperature, notes=notes,
+            address=address, retain_stable=retain_stable, correction=correction,
+            mode=mode, action_history=action_history,
+        )
         usages.extend(usage2)
         if second is None:
             issues.append(f"{module}:第二跑未通过({';'.join(errors2[:3])})")
@@ -1496,7 +1824,10 @@ def review_candidates(
         second_signature = module_signature(module, second)
         if first_signature == second_signature:
             continue
-        third, usage3, errors3 = analyze(tr, module, identity, model, temperature, notes=notes)
+        third, usage3, errors3 = analyze(
+            tr, module, identity, model, temperature, notes=notes,
+            address=address, retain_stable=retain_stable, correction=correction,
+        )
         usages.extend(usage3)
         if third is None:
             issues.append(f"{module}:第三跑未通过({';'.join(errors3[:3])})")
@@ -1524,6 +1855,19 @@ def validate_schema(base: str, table: str, profile: dict[str, Any]) -> dict[str,
     missing = sorted(required - set(fields))
     if missing:
         raise RuntimeError(f"Base缺少字段: {missing}")
+    address_fields = profile.get("address_fields", [])
+    if address_fields:
+        if not profile.get("master_table"):
+            raise RuntimeError("配置了address_fields但缺少master_table")
+        master_data = lark(
+            "base", "+field-list",
+            "--base-token", profile["base"],
+            "--table-id", profile["master_table"],
+        )
+        master_fields = {item["name"] for item in master_data.get("fields", [])}
+        missing_addr = [f for f in address_fields if f not in master_fields]
+        if missing_addr:
+            raise RuntimeError(f"01主档缺少地址字段: {missing_addr}")
     text_required = {profile["source_field"]}
     for values in MODULE_FIELDS.values():
         text_required.update(values)
@@ -1531,6 +1875,8 @@ def validate_schema(base: str, table: str, profile: dict[str, Any]) -> dict[str,
     text_required.discard(cooperation_field)  # 单选 select，单独校验
     if profile.get("notes_field"):
         text_required.add(profile["notes_field"])
+    if profile.get("correction_field"):
+        text_required.add(profile["correction_field"])
     if profile.get("evidence_field"):
         text_required.add(profile["evidence_field"])
     for name in text_required:
@@ -1578,10 +1924,13 @@ def fetch_records(
         profile.get("cooperation_field", "是否达成合作"),
         *profile.get("identity_fields", []),
         profile.get("notes_field", ""),
+        profile.get("correction_field", ""),
         profile.get("valid_field", ""),
         profile.get("evidence_field", ""),
         profile.get("master_link_field", ""),
         profile.get("master_date_field", ""),
+        profile.get("stage_field", ""),
+        profile.get("closure_field", ""),
     ]
     for values in MODULE_FIELDS.values():
         names.extend(values)
@@ -1953,7 +2302,10 @@ def main() -> int:
             logger.emit("skip_invalid", {"record_id": rid})
             continue
         requested = []
+        mode = visit_mode(row, profile)
         for module in modules:
+            if mode == "daily" and module not in DAILY_MODULES:
+                continue  # 日常拜访不做隐性需求/打分/金句
             if rescue_map is not None and (rid not in rescue_map or module not in rescue_map[rid]):
                 continue
             state = module_state(row, module)
@@ -2006,24 +2358,59 @@ def main() -> int:
 
     def process_module(row: dict[str, Any], module: str) -> None:
         rid = row["_record_id"]
+        mode = visit_mode(row, profile)
         identity = {field: cell_text(row.get(field)) for field in profile.get("identity_fields", [])}
         notes = cell_text(row.get(profile.get("notes_field", ""))).strip()
         history = ""
         history_date = ""
+        address = ""
+        correction = ""
+        action_history = ""
         if module == "store-profile":
+            correction = cell_text(row.get(profile.get("correction_field", ""))).strip()
+            if correction:
+                event(rid, module, "correction_injected")
             master_rid = master_record_id_of(row, profile)
             if master_rid:
-                found = find_history_profile(profile, master_rid, rid)
+                address = read_master_address(profile, master_rid)
+                if address:
+                    event(rid, module, "address_injected", details={"address": address})
+                if mode == "daily":
+                    # 日常：读前 history_profiles 次档案（含日期标注）累计更新
+                    found = find_history_profiles(
+                        profile, master_rid, rid,
+                        limit=int(profile.get("history_profiles", 3)),
+                    )
+                    if found:
+                        history = "\n\n".join(
+                            f"进店时间：{date}\n{text}" for date, text in found
+                        )
+                        event(rid, module, "history_found", details={"count": len(found)})
+                else:
+                    found = find_history_profile(profile, master_rid, rid)
+                    if found:
+                        history_date, history_text = found
+                        history = f"进店时间：{history_date}\n{history_text}"
+                        event(rid, module, "history_found", details={"date": history_date})
+        elif module == "next-action" and mode == "daily":
+            master_rid = master_record_id_of(row, profile)
+            if master_rid:
+                found = find_last_actions(profile, master_rid, rid)
                 if found:
-                    history_date, history_text = found
-                    history = f"进店时间：{history_date}\n{history_text}"
-                    event(rid, module, "history_found", details={"date": history_date})
+                    action_text, closure_text = found
+                    action_history = f"上次下一步行动策略：\n{action_text}"
+                    if closure_text:
+                        action_history += f"\n\n上次总结闭环：\n{closure_text}"
+                    event(rid, module, "action_history_found")
+        retain_stable = bool(history) or bool(address)
         event(rid, module, "started")
-        print(f"[{rid}][{module}] started", flush=True)
+        print(f"[{rid}][{module}] started (mode={mode})", flush=True)
         try:
             tr = parse_transcript(cell_text(row[profile["source_field"]]))
             selected, usages, isolated_errors = analyze(
-                tr, module, identity, args.model, args.temperature, notes=notes, history=history
+                tr, module, identity, args.model, args.temperature, notes=notes, history=history,
+                address=address, retain_stable=retain_stable, correction=correction,
+                mode=mode, action_history=action_history,
             )
             if selected is None:
                 logger.emit("errors", {
@@ -2041,6 +2428,8 @@ def main() -> int:
             selected_by_module, review_issues, review_usages = review_candidates(
                 selected, tr, [module], identity, args.model,
                 args.temperature, args.review, notes=notes,
+                address=address, retain_stable=retain_stable, correction=correction,
+                mode=mode, action_history=action_history,
             )
             usages.extend(review_usages)
             if review_issues and args.review_policy == "strict":
@@ -2061,7 +2450,7 @@ def main() -> int:
                 print(f"[{rid}][{module}] review_fallback_primary", flush=True)
 
             payload = render_module(
-                module, selected_by_module[module], tr, identity, rid, history_date
+                module, selected_by_module[module], tr, identity, rid, history_date, mode
             )
             event(rid, module, "ready_to_write", fields=list(payload))
             if not args.dry_run:

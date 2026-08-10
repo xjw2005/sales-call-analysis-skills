@@ -38,6 +38,24 @@ def run_check(root: str | Path, manifest_path: str | Path | None,
         merrs, mwarns = kb.validate_manifest(manifest, base, valid_modules)
         errors.extend(merrs)
         warnings.extend(mwarns)
+        # 挂载覆盖检查：active 条目应至少被一个模块注入
+        if base is not None:
+            covered: set[str] = set()
+            for name, spec in manifest.get("modules", {}).items():
+                covered.update(
+                    e.id for e in kb.select_knowledge(
+                        base, spec.get("selection", []), spec.get("max_tokens")
+                    )
+                )
+            unmounted = sorted(
+                e.id for e in base.entries
+                if e.status == "active" and e.id not in covered
+            )
+            if unmounted:
+                warnings.append(
+                    "挂载覆盖：以下 active 条目未被任何模块注入（新增内容记得挂载或确认不挂载）: "
+                    + ", ".join(unmounted)
+                )
     else:
         warnings.append(f"manifest 不存在（{mpath}），跳过清单校验")
 

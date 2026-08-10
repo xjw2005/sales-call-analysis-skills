@@ -263,7 +263,11 @@ def main():
                 "是否达成合作": "否",
             }, "rec_test",
         ))
-    assert set(rendered) == {field for fields in p.MODULE_FIELDS.values() for field in fields}
+    # 首访模式不输出日常专属字段（总结闭环）
+    first_fields = {
+        field for fields in p.MODULE_FIELDS.values() for field in fields
+    } - {p.MODULE_FIELDS["next-action"][-1]}
+    assert set(rendered) == first_fields
     assert "建议验证问题" not in rendered["隐性需求(仅供参考)"]
     assert "待验证点" not in rendered["隐性需求_原句参考"]
     assert "推断逻辑" in rendered["隐性需求_原句参考"]
@@ -390,7 +394,7 @@ def main():
         tr, "store-profile", {},
         history="进店时间：2026-08-01 10:00:00\n一句话画像：老客户\n门店基本信息（稳定档案）：连锁店",
     )
-    assert "前3天内最近一次拜访的门店档案" in history_message
+    assert "历史拜访的门店档案" in history_message
     assert "老客户" in history_message
     assert history_message.index("动态更新依据") < history_message.index("完整转写")
     no_history_message = p.build_user_message(tr, "store-profile", {})
@@ -660,6 +664,7 @@ def main():
     assert "负责人陈璇飞" not in sanitized["store-profile"]["one_line"]
 
     # ---- 知识库：注入 / 回退 / 校验 ----
+    k.configure(root=None, enabled=False)  # 基线显式取「无知识」状态（真实配置可能已注入）
     baseline = p.system_prompt("store-profile")
     with tempfile.TemporaryDirectory() as tmp:
         kb_root = Path(tmp)
@@ -762,6 +767,83 @@ def main():
         assert validated["门店名称"]["type"] == "auto_number"
     finally:
         p.lark = original_lark
+
+    # ---- 日常拜访模式 ----
+    assert p.DAILY_MODULES == ["explicit-needs", "concerns", "store-profile", "next-action"]
+    assert p.visit_mode({"拜访阶段": "首访破冰"}, {"stage_field": "拜访阶段", "first_stage_choice": "首访破冰"}) == "first"
+    assert p.visit_mode({"拜访阶段": "日常维护"}, {"stage_field": "拜访阶段", "first_stage_choice": "首访破冰"}) == "daily"
+    assert p.visit_mode({}, {"stage_field": "拜访阶段", "first_stage_choice": "首访破冰"}) == "first"
+
+    daily_next = {
+        "closure": {
+            "summary": "本次拜访确认了上次送的报价单已看过，并协助门店完成一次下单演示。",
+            "items": [{
+                "action": "确认报价单并回复是否接受",
+                "done": "已完成",
+                "evidence_ids": ["U0003"],
+                "reason": "",
+            }, {
+                "action": "推进首单",
+                "done": "未完成",
+                "evidence_ids": [],
+                "reason": "客户还需确认物流时效后再下单",
+            }],
+        },
+        "action_judgment": "触发",
+        "judgment_reason": "首单仍待物流时效确认，需要继续跟进。",
+        "confirmed_actions": [],
+        "recommended_actions": [{
+            "topic": "首单推进",
+            "owner": "销售",
+            "timeframe": "3天内",
+            "action": "回复物流时效方案后确认首单。",
+            "reason": "闭环显示首单卡在物流时效确认。",
+            "acceptance": "客户确认首单或明确新的阻塞原因。",
+            "evidence_ids": ["U0003"],
+        }],
+        "second_visit": {"value": "值得", "reason": "首单推进中，需要继续跟进。", "evidence_ids": []},
+    }
+    daily_candidate = {
+        "_scope": {"input_quality": "可用", "quality_reason": "", "role_corrections": [], "exclusions": []},
+        "next-action": daily_next,
+    }
+    errors, _ = p.validate_candidate(daily_candidate, tr, ["next-action"], mode="daily")
+    assert not errors, errors
+    rendered_daily = p.render_module(
+        "next-action", p.split_candidate(daily_candidate, "next-action"), tr, {}, "rec_test",
+        mode="daily",
+    )
+    assert "上一次行动与这一次行动总结闭环" in rendered_daily
+    assert "下一步行动策略" in rendered_daily
+    assert "已完成" in rendered_daily["上一次行动与这一次行动总结闭环"]
+    assert "物流时效" in rendered_daily["下一步行动策略"]
+    # 日常不写合作状态字段
+    assert "是否达成合作" not in rendered_daily
+    # 闭环签名（复核机制）
+    sig = p.module_signature("next-action", daily_candidate)
+    assert sig[0] and sig[1] == "触发"
+    # 未完成无原因 → 报错
+    bad_daily = copy.deepcopy(daily_next)
+    bad_daily["closure"]["items"][1]["reason"] = ""
+    errors, _ = p.validate_candidate(
+        {"_scope": daily_candidate["_scope"], "next-action": bad_daily}, tr, ["next-action"], mode="daily",
+    )
+    assert errors and any("reason不能为空" in error for error in errors)
+    # 已完成无证据 → 报错
+    bad2 = copy.deepcopy(daily_next)
+    bad2["closure"]["items"][0]["evidence_ids"] = []
+    errors, _ = p.validate_candidate(
+        {"_scope": daily_candidate["_scope"], "next-action": bad2}, tr, ["next-action"], mode="daily",
+    )
+    assert errors and any("至少需要1个" in error for error in errors)
+    # action_history 注入
+    ah_message = p.build_user_message(tr, "next-action", {}, action_history="上次行动：确认报价单")
+    assert "上次总结闭环" not in ah_message
+    assert "上次行动" in ah_message
+    # 日常提示词存在且与首访不同
+    daily_prompts = {m: p.system_prompt(m, mode="daily") for m in ("store-profile", "next-action")}
+    assert "日常" in daily_prompts["next-action"]
+    assert "前三次拜访" in daily_prompts["store-profile"]
 
     print("self_test: OK")
 

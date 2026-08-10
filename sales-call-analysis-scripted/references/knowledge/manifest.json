@@ -1,37 +1,46 @@
 {
   "$schema": "./manifest.schema.json",
-  "version": 1,
-  "updated": "2026-08-03",
+  "version": 4,
+  "updated": "2026-08-07",
   "modules": {
     "store-profile": {
       "instruction": "知识只用于理解客户表述与归类（识别门店品类/品牌/经营模式），禁止据此补写录音未提及的门店事实；所有档案内容仍需客户证据。",
-      "max_tokens": 1200,
-      "selection": []
+      "max_tokens": 10000,
+      "selection": [
+        { "type": "query", "facets": { "tags": ["用途:门店识别"], "status": "active" } }
+      ]
     },
     "implicit-needs": {
       "instruction": "知识只用于生成合理的假设方向；每条隐性需求/顾虑仍需录音内客户证据支撑，不得据知识条目补写。",
-      "max_tokens": 1000,
-      "selection": []
+      "max_tokens": 4000,
+      "selection": [
+        { "type": "query", "facets": { "tags": ["用途:需求推断"], "status": "active" } }
+      ]
     },
     "explicit-needs": {
-      "max_tokens": 400,
+      "max_tokens": 1600,
       "selection": []
     },
     "concerns": {
-      "max_tokens": 400,
-      "selection": []
+      "max_tokens": 7200,
+      "selection": [
+        { "type": "query", "facets": { "tags": ["用途:打标"], "status": "active" } }
+      ]
     },
     "effectiveness": {
-      "max_tokens": 400,
+      "max_tokens": 1600,
       "selection": []
     },
     "quotes": {
-      "max_tokens": 400,
+      "max_tokens": 1600,
       "selection": []
     },
     "next-action": {
-      "max_tokens": 400,
-      "selection": []
+      "instruction": "参考知识库（RACI）仅用于问题→主责归属判断，不得据此编造时限、政策、流程细节；动作与时限仍需录音证据支撑。",
+      "max_tokens": 3200,
+      "selection": [
+        { "type": "query", "facets": { "tags": ["用途:指派"], "status": "active" } }
+      ]
     }
   }
 }

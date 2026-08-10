@@ -27,7 +27,7 @@ DOMAIN_RE = re.compile(r"^[a-z0-9]{1,20}$")
 ENTRY_HEAD_RE = re.compile(r"^##\s+(.+?)[（(]([a-z0-9]+(?:-[a-z0-9]+)*-\d{3})[）)]\s*$")
 KB_REF_RE = re.compile(r"知识#([a-z0-9]+(?:-[a-z0-9]+)*-\d{3})")
 
-STATUS_ENUM = ("active", "deprecated", "archived", "superseded")
+STATUS_ENUM = ("active", "draft", "deprecated", "archived", "superseded")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MIN_CHARS, MAX_CHARS = 40, 2500  # 正文长度警戒线（字符）
 
@@ -550,11 +550,12 @@ def validate_knowledge(root: Path) -> tuple[list[str], list[str]]:
                 errors.append(f"{path}: 条目 {e.id} status 非法: {e.status!r}")
             if e.status == "superseded" and not e.superseded_by:
                 errors.append(f"{path}: 条目 {e.id} 为 superseded 但缺 superseded_by")
-            n = len(e.content)
-            if n < MIN_CHARS:
-                warnings.append(f"{path}: 条目 {e.id} 过短({n}字符)，疑似空壳")
-            elif n > MAX_CHARS:
-                warnings.append(f"{path}: 条目 {e.id} 过长({n}字符)，建议拆分")
+            if e.status != "draft":
+                n = len(e.content)
+                if n < MIN_CHARS:
+                    warnings.append(f"{path}: 条目 {e.id} 过短({n}字符)，疑似空壳")
+                elif n > MAX_CHARS:
+                    warnings.append(f"{path}: 条目 {e.id} 过长({n}字符)，建议拆分")
             file_version = max(file_version, e.version)
         if file_version != (version if isinstance(version, int) else 0):
             warnings.append(f"{path}: 文件 version({version}) 低于条目最大 version({file_version})")

@@ -47,7 +47,7 @@
       "properties": {
         "type": { "enum": ["entry"] },
         "file": { "type": "string" },
-        "id": { "type": "string", "pattern": "^[a-z0-9]+-[a-z0-9]+-\\d{3}$" }
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*-\\d{3}$" }
       },
       "additionalProperties": false
     },
@@ -60,7 +60,7 @@
           "type": "object",
           "properties": {
             "tags": { "type": "array", "items": { "type": "string" } },
-            "status": { "enum": ["active", "deprecated", "archived", "superseded"] }
+            "status": { "enum": ["active", "draft", "deprecated", "archived", "superseded"] }
           },
           "additionalProperties": false
         },

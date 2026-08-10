@@ -1,33 +1,47 @@
 {
-  "api_url": "https://example.com/v1",
-  "api_key": "",
-  "model": "deepseek-v4-pro",
-  "knowledge_root": "",
-  "knowledge_enabled": true,
-  "knowledge_mode": "manifest",
-  "default_profile": "default",
-  "profiles": {
-    "default": {
-      "base": "base_token",
-      "table": "table_id",
-      "default_view": "view_id",
-      "source_field": "完整对话-文字",
-      "notes_field": "现场速记",
-      "identity_fields": ["门店编号", "门店名称", "门店联系人"],
-      "evidence_field": "门店档案-原文证据",
-      "master_table": "门店主档table_id",
-      "master_link_field": "关联门店",
-      "master_date_field": "进店时间",
-      "master_history_days": 3,
-      "master_fields": {
-        "一句画像": "one_line",
-        "门店基本信息": "basic",
-        "主营品类与品牌": "categories_brands",
-        "经营模式": "business_model",
-        "选品偏好": "selection_motion",
-        "利润偏好": "price_profit",
-        "合作偏好与排斥项": "cooperation_preferences"
-      }
-    }
+ "api_url": "https://example.com/v1",
+ "api_key": "",
+ "model": "deepseek-v4-pro",
+ "knowledge_root": "",
+ "knowledge_enabled": true,
+ "knowledge_mode": "manifest",
+ "default_profile": "default",
+ "profiles": {
+  "default": {
+   "base": "base_token",
+   "table": "table_id",
+   "default_view": "view_id",
+   "source_field": "完整对话-文字",
+   "notes_field": "现场速记",
+   "identity_fields": [
+    "门店编号",
+    "门店名称",
+    "门店联系人"
+   ],
+   "evidence_field": "门店档案-原文证据",
+   "master_table": "门店主档table_id",
+   "master_link_field": "关联门店",
+   "master_date_field": "进店时间",
+   "master_history_days": 3,
+   "stage_field": "拜访阶段",
+   "first_stage_choice": "首访破冰",
+   "closure_field": "上一次行动与这一次行动总结闭环",
+   "history_profiles": 3,
+   "history_actions": 1,
+   "master_fields": {
+    "一句画像": "one_line",
+    "门店基本信息": "basic",
+    "主营品类与品牌": "categories_brands",
+    "经营模式": "business_model",
+    "选品偏好": "selection_motion",
+    "利润偏好": "price_profit",
+    "合作偏好与排斥项": "cooperation_preferences"
+   },
+   "address_fields": [
+    "门店所在省",
+    "详细地址"
+   ],
+   "correction_field": "门店档案纠正（dsr填写）"
   }
+ }
 }
