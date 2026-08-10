@@ -1976,9 +1976,9 @@ def validate_schema(base: str, table: str, profile: dict[str, Any]) -> dict[str,
         if (
             valid.get("type") != "select"
             or valid.get("multiple")
-            or not {"有效", "无效"}.issubset(valid_options)
+            or not {"有效", "录音过短", "内容无效"}.issubset(valid_options)
         ):
-            raise RuntimeError(f"字段{valid_field}必须是包含有效/无效的单选字段")
+            raise RuntimeError(f"字段{valid_field}必须是包含有效/录音过短/内容无效的单选字段")
     concern = fields["关心类目打标"]
     options = [x["name"] for x in concern.get("options", [])]
     if concern.get("type") != "select" or not concern.get("multiple"):
@@ -2052,6 +2052,39 @@ def fetch_records(
 
 def field_blank(value: Any) -> bool:
     return value is None or value == "" or value == []
+
+
+# 无效录音在 7 个分析模块主字段统一写的标记（按无效原因分文案；「无效」是迁移前旧值，按内容无效处理）
+INVALID_MARKERS = {
+    "录音过短": "录音无实质性内容",
+    "内容无效": "录音无效",
+    "无效": "录音无效",
+}
+# 写标记的字段：每个模块的正文主字段；select 字段（关心类目打标、是否达成合作）与原文参考/证据类字段不写
+INVALID_MARKER_FIELDS = [
+    "显性需求(仅供参考)",
+    "隐性需求(仅供参考)",
+    "场景化类目归因",
+    "合作进展打分评估",
+    "核心金句",
+    "门店档案",
+    "下一步行动策略",
+]
+
+
+def mark_invalid_modules(
+    row: dict[str, Any], profile: dict[str, Any], valid_value: str,
+    base: str, table: str,
+) -> list[str]:
+    """无效录音：7 个分析模块主字段统一写标记，只填空字段。返回实际写入的字段。"""
+    marker = INVALID_MARKERS.get(valid_value, "录音无效")
+    payload = {
+        field: marker for field in INVALID_MARKER_FIELDS
+        if field_blank(row.get(field))
+    }
+    if payload:
+        update_record(base, table, row["_record_id"], payload)
+    return list(payload)
 
 
 def module_state(row: dict[str, Any], module: str, mode: str = "first") -> str:
@@ -2394,9 +2427,17 @@ def main() -> int:
             skipped_blank += 1
             continue
         valid_field = profile.get("valid_field")
-        if valid_field and cell_text(row.get(valid_field)) == "无效":
+        if valid_field and cell_text(row.get(valid_field)) not in ("", "有效"):
             skipped_invalid += 1
-            logger.emit("skip_invalid", {"record_id": rid})
+            marked: list[str] = []
+            if not args.preflight and not args.dry_run:
+                marked = mark_invalid_modules(
+                    row, profile, cell_text(row.get(valid_field)), base, table
+                )
+            logger.emit("events", {
+                "at": datetime.now().isoformat(timespec="seconds"),
+                "event": "skip_invalid", "record_id": rid, "marked_fields": marked,
+            })
             continue
         requested = []
         mode = visit_mode(row, profile)
