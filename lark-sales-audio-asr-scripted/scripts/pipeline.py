@@ -1374,7 +1374,7 @@ def judge_validity(
 ) -> dict[str, Any]:
     """两层自动判定「是否有效对话」。
 
-    第一层硬门禁（纯规则）：录音时长不足 valid_min_seconds（默认 180 秒）
+    第一层硬门禁（纯规则）：录音时长不足 valid_min_seconds（默认 60 秒）
     直接填「录音过短」；转写为空或没有一行能解析直接填「内容无效」。
     第二层模型内容判断（核心）：让模型读完整转写，判断内容是否属于
     商业场景、有没有记录价值，输出 有效/内容无效 与理由。
@@ -1383,7 +1383,7 @@ def judge_validity(
           "source": "rule|llm|model_error"}。
     模型失败时保守填「内容无效」（fail-closed，人工可在飞书改回）。
     """
-    min_seconds = int(profile.get("valid_min_seconds", 180))
+    min_seconds = int(profile.get("valid_min_seconds", 60))
     duration = duration_seconds if duration_seconds is not None else transcript_duration(labeled)
     if duration is not None and duration < min_seconds:
         return {
@@ -1725,6 +1725,16 @@ def relabel_run(
         if result.get("status") == "role_labeled" and not dry_run:
             try:
                 write_transcript(state["profile"], rid, result["_labeled"], True)
+                try:
+                    # relabel 后补判有效性（#10 漏洞修复）：字段为空才写，人工改过不覆盖
+                    validity_verdict = judge_validity(
+                        run_cfg, state["profile"], result["_labeled"],
+                        duration_seconds=record.get("duration_seconds"),
+                    )
+                    write_validity(state["profile"], rid, result["_labeled"])
+                    result["validity"] = validity_verdict["value"]
+                except Exception as exc:
+                    result["validity_error"] = str(exc)
                 result.update({"status": "written", "written_at": now(), "error": None})
             except Exception as exc:
                 result.update({"status": "write_error", "error": str(exc)})

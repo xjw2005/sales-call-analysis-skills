@@ -41,7 +41,7 @@
         "门店联系人"
       ],
       "valid_field": "",
-      "valid_min_seconds": 120
+      "valid_min_seconds": 60
     }
   }
 }

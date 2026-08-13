@@ -1,0 +1,22 @@
+{
+  "default_profile": "default",
+  "profiles": {
+    "default": {
+      "base": "<base_token，01/02 表所在的 Base>",
+      "master_table": "<01 门店主档 table_id>",
+      "visit_table": "<02 门店拜访记录 table_id>",
+      "visit_link_field": "关联门店",
+      "visit_date_field": "进店时间",
+      "visit_profile_field": "门店档案",
+      "fields": {
+        "一句画像": "one_line",
+        "门店基本信息": "basic",
+        "主营品类与品牌": "categories_brands",
+        "经营模式": "business_model",
+        "选品偏好": "selection_motion",
+        "利润偏好": "price_profit",
+        "合作偏好与排斥项": "cooperation_preferences"
+      }
+    }
+  }
+}

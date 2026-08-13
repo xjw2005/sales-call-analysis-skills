@@ -65,7 +65,7 @@
         "门店名称"
       ],
       "valid_field": "是否有效对话",
-      "valid_min_seconds": 120
+      "valid_min_seconds": 60
     }
   }
 }
