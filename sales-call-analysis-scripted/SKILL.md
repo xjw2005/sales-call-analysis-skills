@@ -157,3 +157,14 @@ python scripts/knowledge_check.py
 
 ### 历史读取防护
 - 历史档案/行动读取只取**早于当前记录进店时间**的记录（防补录/重跑时间穿越）；同一门店记录按 per-store 锁串行处理（后一条能看到前一条刚写的历史）。
+
+
+## 部署（新机器从零安装）
+
+完整步骤见 [references/deployment.md](references/deployment.md)（本 skill 与 `lark-sales-audio-asr-scripted` 配套部署）。要点：
+
+- 上游依赖 ASR skill（转写+角色归类先行），两 skill 一起装。
+- **LLM 凭证**：`api_url` 走火山方舟网关（Ark），`api_key` 留空、运行时从 `ARK_API_KEY` 环境变量读；模型默认 `deepseek-v4-pro`。
+- **环境变量 6 个（setx 用户级）**：`LLM_API_URL` / `ARK_API_KEY` / `LAS_API_KEY` / `LASUTIL_PATH` / `TENCENT_ASR_SECRET_ID` / `TENCENT_ASR_SECRET_KEY`；**setx 只影响新进程**，定时任务场景先 `source` ASR skill 里的 `env-loader.sh`（从注册表加载，不硬编码密钥）。
+- **知识库**：`knowledge_root` 指向 Obsidian 仓库 `knowledge/a2/`（a2 品牌方专用），目录不存在时注入自动关闭。
+- **凭证与表 ID 不入公开仓库**；config.local.json 含真实表 ID。

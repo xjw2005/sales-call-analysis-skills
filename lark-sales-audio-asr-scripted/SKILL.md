@@ -131,3 +131,13 @@ python -m py_compile scripts/pipeline.py scripts/tencent_flash.py
 
 ### 有效性三态
 - 字段三态：有效 / 录音过短 / 内容无效。时长硬门禁（<120 秒）→ 录音过短；模型读转写判内容 → 有效/内容无效；模型失败保守判内容无效（fail-closed，人工可改回）。判定详情记 `events.jsonl`。
+
+
+## 部署（新机器从零安装）
+
+完整步骤见 [references/deployment.md](references/deployment.md)（本 skill 与 `sales-call-analysis-scripted` 配套部署）。要点：
+
+- **依赖**：las_sdk（火山 LAS CLI，TOS wheel 安装）、mutagen（时长估价）、ffmpeg（腾讯方案用）；lasutil 在 `<python>\Scripts\`，需用 `lasutil_path` 或 `LASUTIL_PATH` 指定完整路径。
+- **环境变量（6 个，用户级 setx）**：`LLM_API_URL` / `ARK_API_KEY` / `LAS_API_KEY` / `LASUTIL_PATH` / `TENCENT_ASR_SECRET_ID` / `TENCENT_ASR_SECRET_KEY`。**setx 只影响新进程**——WorkBuddy 主进程在 setx 前启动时，所有子进程（含定时任务）都读不到，这是定时任务失败最常见原因。
+- **定时任务兜底**：脚本执行前先 `source env-loader.sh`（从注册表 HKCU\Environment 读取并 export 6 个变量，不硬编码密钥）；定时任务 prompt 第一步必须是 source 它；长期治本可重启 WorkBuddy 让主进程继承。
+- **凭证不入库**：`role-llm.json` 的 api_key 留空，走环境变量；config.local.json 含表 ID 不提交到公开仓库。
