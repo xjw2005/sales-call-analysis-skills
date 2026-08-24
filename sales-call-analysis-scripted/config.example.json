@@ -21,6 +21,7 @@
    "evidence_field": "门店档案-原文证据",
    "master_table": "门店主档table_id",
    "master_link_field": "关联门店",
+   "master_full_text_field": "",
    "master_date_field": "进店时间",
    "master_history_days": 3,
    "stage_field": "拜访阶段",

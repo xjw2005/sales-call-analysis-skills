@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -134,26 +135,23 @@ def api_key() -> str:
     )
 
 
-def _resolve_lark_bin() -> str:
-    found = shutil.which("lark-cli") or "lark-cli"
-    if found.lower().endswith((".cmd", ".bat")):
-        try:
-            content = Path(found).read_text(encoding="utf-8", errors="replace")
-            match = re.search(r'"([^"]*lark-cli\.exe)"', content)
-            if match:
-                exe = os.path.expandvars(match.group(1))
-                if Path(exe).exists():
-                    return exe
-        except OSError:
-            pass
-    return found
+def _resolve_lark_bin() -> list[str]:
+    # 直接用 node 运行 run.js，绕过 cmd.exe 的 8191 字符命令行限制（大文本写回会触发「命令行太长」）
+    found = shutil.which("lark-cli")
+    if found:
+        lark_dir = Path(found).resolve().parent
+        run_js = lark_dir / "node_modules" / "@larksuite" / "cli" / "scripts" / "run.js"
+        if run_js.exists():
+            node = lark_dir / "node.exe"
+            return [str(node) if node.exists() else "node", str(run_js)]
+    return [found or "lark-cli"]
 
 
 LARK_BIN = _resolve_lark_bin()
 
 
 def lark(*args: str, retries: int = 3) -> dict[str, Any]:
-    cmd = [LARK_BIN, *args, "--as", "user", "--format", "json"]
+    cmd = [*LARK_BIN, *args, "--as", "user", "--format", "json"]
     last = ""
     for attempt in range(retries):
         proc = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace")
@@ -1400,6 +1398,9 @@ def sync_master_profile(
         value = dims.get(dim_key, "").strip()
         if value:
             patch[field] = value
+    full_field = profile.get("master_full_text_field", "")
+    if full_field and profile_text.strip():
+        patch[full_field] = profile_text
     if not patch:
         raise RuntimeError("门店档案正文解析不出任何维度，未写 01 主档")
     update_record(profile["base"], profile["master_table"], master_rid, patch)
@@ -1533,9 +1534,10 @@ def render_module(
     mode: str = "first",
     action_history: str = "",
     closure_field: str = "",
+    degraded: bool = False,
 ) -> dict[str, Any]:
     errors, ctx = validate_candidate(candidate, tr, [module], mode, action_history)
-    if errors:
+    if errors and not degraded:
         raise ValueError("渲染前校验失败: " + "；".join(errors))
     if module == "explicit-needs":
         payload = render_explicit_needs(candidate[module], tr, ctx)
@@ -1569,7 +1571,11 @@ def _strip_knowledge_deep(value: Any) -> Any:
     return value
 
 
-_DROP = {"response_format": False, "thinking": False}
+_DROP = {"response_format": False, "thinking": False, "max_tokens": False}
+# 超长录音（如 50 分钟、数百句）的模块分析输出可超 16K token；API 默认输出上限（如 8192）
+# 会导致 JSON 中途截断（finish_reason=length）。此处显式抬高输出上限；按实际用量计费，
+# 普通录音输出远小于该值，不受影响。若服务端拒绝该参数则自动降级重试。
+MAX_OUTPUT_TOKENS = 32768
 
 
 def call_llm(system: str, user: str, model: str, temperature: float) -> tuple[str, dict[str, Any]]:
@@ -1587,6 +1593,8 @@ def call_llm(system: str, user: str, model: str, temperature: float) -> tuple[st
             body["response_format"] = {"type": "json_object"}
         if not _DROP["thinking"]:
             body["thinking"] = {"type": "disabled"}
+        if not _DROP["max_tokens"]:
+            body["max_tokens"] = MAX_OUTPUT_TOKENS
         req = urllib.request.Request(
             api_url(),
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
@@ -1600,7 +1608,7 @@ def call_llm(system: str, user: str, model: str, temperature: float) -> tuple[st
             detail = exc.read().decode("utf-8", "replace")[:500]
             if exc.code == 400:
                 changed = False
-                for param in ("response_format", "thinking"):
+                for param in ("response_format", "thinking", "max_tokens"):
                     if param in detail:
                         _DROP[param] = True
                         changed = True
@@ -1608,7 +1616,8 @@ def call_llm(system: str, user: str, model: str, temperature: float) -> tuple[st
                     continue
             last = f"HTTP {exc.code}: {detail}"
             time.sleep((attempt + 1) * (15 if exc.code == 429 else 4))
-        except (urllib.error.URLError, TimeoutError, KeyError) as exc:
+        except (urllib.error.URLError, TimeoutError, KeyError,
+                http.client.HTTPException) as exc:  # 含 IncompleteRead(服务端提前断连)
             last = exc
             time.sleep((attempt + 1) * 4)
     raise RuntimeError(f"模型调用连续失败: {last}")
@@ -1762,7 +1771,9 @@ def analyze(
                 errors = [f"知识引用不在本次注入集: {bad_refs}"]
         if not errors:
             return last, usages, []
-    return None, usages, errors + ([f"最后候选={json.dumps(last, ensure_ascii=False)[:1000]}"] if last else [])
+    # 两次尝试仍未通过硬校验：仍返回最后候选（可能为 None，如 JSON 均解析失败）。
+    # 调用方以 errors 非空判断失败；非 None 的候选可用于降级写回（degraded 渲染）。
+    return last, usages, errors
 
 
 def norm_text(value: str) -> str:
@@ -1892,7 +1903,7 @@ def review_candidates(
             mode=mode, action_history=action_history,
         )
         usages.extend(usage2)
-        if second is None:
+        if second is None or errors2:
             issues.append(f"{module}:第二跑未通过({';'.join(errors2[:3])})")
             continue
         first_module = split_candidate(primary, module)
@@ -1906,7 +1917,7 @@ def review_candidates(
             mode=mode, action_history=action_history,
         )
         usages.extend(usage3)
-        if third is None:
+        if third is None or errors3:
             issues.append(f"{module}:第三跑未通过({';'.join(errors3[:3])})")
             continue
         third_signature = module_signature(module, third)
@@ -1945,6 +1956,9 @@ def validate_schema(base: str, table: str, profile: dict[str, Any]) -> dict[str,
         missing_addr = [f for f in address_fields if f not in master_fields]
         if missing_addr:
             raise RuntimeError(f"01主档缺少地址字段: {missing_addr}")
+        full_field = profile.get("master_full_text_field", "")
+        if full_field and full_field not in master_fields:
+            raise RuntimeError(f"01主档缺少档案全文字段: {full_field}")
     text_required = {profile["source_field"]}
     for values in MODULE_FIELDS.values():
         text_required.update(values)
@@ -2215,8 +2229,17 @@ def latest_leftover_run() -> Path:
     return max(candidates, key=lambda x: x.name)
 
 
-def rescue_targets(path: Path) -> dict[str, set[str]]:
+def rescue_targets(path: Path) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """返回 (targets, forced)。
+
+    targets：manual + errors 的全部目标（原有语义，圈定 rescue 范围）。
+    forced：仅来自 errors.jsonl 的目标（硬校验失败/降级写回的模块）。
+    降级写回会填字段，使模块脱离「空模块」筛选；forced 命中的模块
+    无视字段非空强制重跑，重跑通过即覆盖降级内容为合格结果。
+    partial（manual）不进 forced：不覆盖用户可能已人工编辑的内容。
+    """
     targets: dict[str, set[str]] = {}
+    forced: dict[str, set[str]] = {}
     for name in ("manual", "errors"):
         file = path / f"{name}.jsonl"
         if not file.exists():
@@ -2228,7 +2251,9 @@ def rescue_targets(path: Path) -> dict[str, set[str]]:
                 continue
             modules = item.get("modules") or ALL_MODULES
             targets.setdefault(rid, set()).update(modules)
-    return targets
+            if name == "errors":
+                forced.setdefault(rid, set()).update(modules)
+    return targets, forced
 
 
 def rescue_budget(runs_dir: Path, source_path: Path) -> tuple[str, int]:
@@ -2311,6 +2336,11 @@ def main() -> int:
         type=int,
         default=1,
         help="同一根运行允许的累计rescue轮数（默认1；提高必须显式指定）",
+    )
+    parser.add_argument(
+        "--no-degrade",
+        action="store_true",
+        help="禁用校验失败的降级写回（恢复旧版行为：validation_failed 转人工、字段留空）",
     )
     parser.add_argument(
         "--model",
@@ -2396,6 +2426,7 @@ def main() -> int:
         rows = fetch_records(base, table, view, profile, args.start, args.count)
 
     rescue_map: dict[str, set[str]] | None = None
+    rescue_forced: dict[str, set[str]] = {}
     if args.rescue:
         rescue_path = latest_leftover_run() if args.rescue == "latest" else Path(args.rescue)
         rescue_root, rescue_round = rescue_budget(ROOT / "runs", rescue_path)
@@ -2414,7 +2445,7 @@ def main() -> int:
         (run_dir / "run_manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        rescue_map = rescue_targets(rescue_path)
+        rescue_map, rescue_forced = rescue_targets(rescue_path)
 
     tasks = []
     skipped_blank = skipped_complete = skipped_invalid = skipped_unknown_stage = partial = 0
@@ -2456,6 +2487,9 @@ def main() -> int:
             state = module_state(row, module, mode)
             if module in overwrite or args.input_file:
                 requested.append(module)
+            elif rescue_forced and rid in rescue_forced and module in rescue_forced[rid]:
+                # 硬校验失败/降级写回的模块：字段非空（降级内容）也强制重跑，通过即覆盖
+                requested.append(module)
             elif state == "empty":
                 requested.append(module)
             elif state == "partial":
@@ -2489,7 +2523,7 @@ def main() -> int:
         logger.close()
         print(f"[runs] {run_dir}", flush=True)
         return 0
-    stats = {"done": 0, "manual": partial, "errors": 0}
+    stats = {"done": 0, "manual": partial, "errors": 0, "degraded": 0}
     stats_lock = threading.Lock()
     write_lock = threading.Lock()
 
@@ -2581,16 +2615,88 @@ def main() -> int:
                     address=address, retain_stable=retain_stable, correction=correction,
                     mode=mode, action_history=action_history,
                 )
-                if selected is None:
+                if isolated_errors:
+                    if selected is None or args.no_degrade:
+                        # 连合法 JSON 都没有，或显式禁用降级：无内容可写，转人工
+                        logger.emit("errors", {
+                            "record_id": rid, "modules": [module],
+                            "reason": "独立模块两轮校验未通过",
+                            "errors": isolated_errors,
+                        })
+                        event(rid, module, "validation_failed", errors=isolated_errors[:5])
+                        with stats_lock:
+                            stats["errors"] += 1
+                        print(f"[{rid}][{module}] validation_failed", flush=True)
+                        return
+                    # 降级写回最后候选：字段不留空；仍记 errors 保留 rescue 重跑机会（通过后覆盖为合格结果）
                     logger.emit("errors", {
                         "record_id": rid, "modules": [module],
-                        "reason": "独立模块两轮校验未通过",
+                        "reason": "独立模块两轮校验未通过（已降级写回最后候选，rescue 重跑通过可覆盖）",
                         "errors": isolated_errors,
+                        "degraded": True,
                     })
-                    event(rid, module, "validation_failed", errors=isolated_errors[:5])
-                    with stats_lock:
-                        stats["errors"] += 1
-                    print(f"[{rid}][{module}] validation_failed", flush=True)
+                    event(rid, module, "validation_degraded", errors=isolated_errors[:5])
+                    try:
+                        degraded_value = split_candidate(selected, module)
+                        payload = render_module(
+                            module, degraded_value, tr, identity, rid, history_date, mode,
+                            action_history, _closure_field_of(profile), degraded=True,
+                        )
+                        event(rid, module, "degraded_ready_to_write", fields=list(payload))
+                        if not args.dry_run:
+                            with write_lock:
+                                update_record(base, table, rid, payload)
+                        if module == "store-profile" and not args.dry_run:
+                            try:
+                                master_result = sync_master_profile(
+                                    profile, row, payload[MODULE_FIELDS["store-profile"][0]]
+                                )
+                                event(rid, module, "master_synced", details=master_result)
+                                print(
+                                    f"[{rid}][store-profile] master_synced="
+                                    f"{len(master_result['fields'])}字段",
+                                    flush=True,
+                                )
+                            except Exception as exc:
+                                event(rid, module, "master_sync_failed", reason=str(exc))
+                                print(
+                                    f"[{rid}][store-profile] master_sync_failed: {str(exc)[:120]}",
+                                    flush=True,
+                                )
+                        logger.emit("done", {
+                            "record_id": rid,
+                            "modules": [module],
+                            "dry_run": args.dry_run,
+                            "fields": payload,
+                            "usage": usages,
+                            "review_issues": [],
+                            "review_policy": args.review_policy,
+                            "knowledge_refs": kb.collect_knowledge_refs(degraded_value),
+                            "degraded": True,
+                            "degraded_errors": isolated_errors[:5],
+                        })
+                        event(
+                            rid, module,
+                            "validation_degraded_dry_run" if args.dry_run else "validation_degraded_written",
+                        )
+                        with stats_lock:
+                            stats["degraded"] += 1
+                        print(
+                            f"[{rid}][{module}] validation_degraded → "
+                            f"{'dry-run' if args.dry_run else 'written'}"
+                            "（降级输出，未通过硬校验，建议人工复核）",
+                            flush=True,
+                        )
+                    except Exception as exc:
+                        # 降级渲染/写回失败（候选结构缺陷等）→ 回退转人工
+                        logger.emit("errors", {
+                            "record_id": rid, "modules": [module],
+                            "reason": f"降级写回失败，回退转人工: {exc}",
+                        })
+                        event(rid, module, "exception", reason=str(exc))
+                        with stats_lock:
+                            stats["errors"] += 1
+                        print(f"[{rid}][{module}] degraded_write_failed: {str(exc)[:160]}", flush=True)
                     return
 
                 event(rid, module, "primary_validated")

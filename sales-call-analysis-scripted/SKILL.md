@@ -12,19 +12,19 @@ description: 用无状态脚本流水线批量分析带时间戳、已标注销�
 - 每条录音使用全新模型调用，不跨记录共享客户信息。
 - 每个模块使用专属提示词和独立 API 请求；每个请求都重新提供同一份完整录音转写，禁止合并请求。日常模式的 store-profile/next-action 使用 `store-profile-daily.md`/`next-action-daily.md` 提示词。
 - 模型只引用确定性的发言 ID；原话和时间戳由脚本从转写中提取。
-- 首轮代码硬校验不通过或写后复读不一致时，不写对应模块。
+- 首轮代码硬校验不通过时先用该模块专属提示词修复一次；仍不通过则**降级写回最后候选**（事件 `validation_degraded`，done.jsonl 带 `degraded` 标记，汇总时提醒人工复核），不让字段留空；同时仍记 errors.jsonl，保留 rescue 重跑覆盖机会。仅当连合法 JSON 都无法产出，或显式 `--no-degrade` 时，才不写对应模块、转人工。写后复读不一致时不写对应模块。
 - 风险复核只比较证据、类目状态、评分和档案状态等业务判断骨架，不比较标题、解释和润色文字；默认复核未收敛时保留首轮硬校验合格结果并记录警告，`--review-policy strict` 才阻止写回。
 - 默认只填完全为空的模块；部分已有内容进入人工清单，除非显式指定覆盖。模式切换时互斥字段（首访=是否达成合作、日常=总结闭环）不参与完成度判断。
 - 门店档案是**动态更新档案**，不是每次重新生成：store-profile 模块读历史档案累计更新（首访模式读前3天内最近一次；日常模式读前3次），前次确认且本次未提及的事实保留（稳定档案），前次待核验本次有证据则确认，冲突以本次证据为准；低置信度内容不得进入稳定档案。
 - 门店档案固定输出七个维度：一句话画像、门店基本信息、主营品类与品牌、经营模式、选品偏好、利润偏好、合作偏好与排斥项；不得增减。**关键证据单独写入「门店档案-原文证据」字段**（`evidence_field` 配置），正文保持精简（读历史省 token）；档案口径（来源 record_id、参考历史进店时间）由脚本写入正文。
-- store-profile 写回 02 表后，自动把正文拆成 7 维度**全量覆盖**写入 01 门店主档表（`master_table` 配置，经「关联门店」link 定位主档记录；`master_fields` 配置维度字段映射）。「未确认」维度按原文照写；01 主档写失败记 warning 事件，不阻断 02 表结果。用户已授权覆盖写（非只填空）。
+- store-profile 写回 02 表后，自动把正文拆成 7 维度**全量覆盖**写入 01 门店主档表（`master_table` 配置，经「关联门店」link 定位主档记录；`master_fields` 配置维度字段映射）。若配置 `master_full_text_field`（当前=「门店档案」），档案全文（与 02 表「门店档案」字段同文，含档案口径行）也全量覆盖写入该字段；schema 预检会校验该字段存在。「未确认」维度按原文照写；01 主档写失败记 warning 事件，不阻断 02 表结果。用户已授权覆盖写（非只填空）。
 - store-profile 分析时会从 01 门店主档读取门店地址（`address_fields` 配置的字段，如 `门店所在省`/`详细地址`），作为可信已知事实注入提示词：地址可直接写入门店基本信息，无需录音证据支持（来源为主档清单），写入时 `state_type` 用 稳定档案、证据留空；该门店无关联主档或地址为空时不注入。
 - store-profile 分析时还注入「门店档案纠正（dsr填写）」（`correction_field` 配置）：DSR 人工填写的门店事实补充与修正，权威性高于现场速记与转写，冲突时以纠正为准；纠正中与档案维度相关的门店事实（面积、主营品项、销量规模、合作状态等）写入对应维度（证据留空、稳定档案），行动推进类信息不属于档案维度，不写入档案正文；字段为空时不注入。
 - 事实来源按优先级：门店档案纠正（人工权威）＞ 门店主档地址（可信已知）＞ 本次客户证据（必须引用）＞ 历史档案（仅保留项）。「稳定档案+空证据」的保留项必须能在可信来源（历史档案+地址+纠正）中找到依据，否则校验降为未确认——不允许无依据放行。
 - 下一步行动策略按模式分流：**首访模式**读取飞书`是否达成合作`单选字段作为唯一合作状态来源，按未合作/已合作两套规则分析（模型不得自行改判，飞书正文不重复展示该控制字段）；**日常模式**不判合作状态，同一次分析输出「上一次行动与这一次行动总结闭环」+「下一步行动策略」两个字段（闭环记录上次行动完成情况与本次实际做了什么，输入含该门店前一次的行动策略与闭环，无历史时闭环 items 必须为空，不得编造上次行动）。
 - 下一步行动策略先判断`触发/不触发/待验证`，只把对话结束后仍待执行的事项列为“已确认的后续事项”；现场已完成、正在执行或客户仅简单附和的动作不重复列入。建议动作包含事项主题、责任人、时间框架和验收标准；证据仅用于内部校验，飞书正文不展开时间戳和原话。日常模式的建议动作允许无当前录音证据（对应上次未完成事项的延续型建议），时限无明确依据时写「未明确时间/待确认」。
 
-运行前按需读取 [输出与校验规范](references/output-spec.md)。修改模型提示词时读取 `references/prompts/` 中的通用规则和对应模块提示词。
+运行前按需读取 [输出与校验规范](references/output-spec.md)。部署到新机器时读取 [部署指南](references/deployment.md)。修改模型提示词时读取 `references/prompts/` 中的通用规则和对应模块提示词。
 
 ## 标准流程
 
@@ -33,11 +33,11 @@ description: 用无状态脚本流水线批量分析带时间戳、已标注销�
 3. 每条记录按模式选择模块清单调用（每次调用都输入完整录音，但只解决一个任务）：
    - 首访模式七个模块：显性需求、隐性需求、九类关心点、销售对话效能、销售金句、门店档案、下一步行动策略；
    - 日常模式四个模块：显性需求、九类关心点、门店档案（日常版提示词，读前3次档案累计）、闭环+下一步行动策略（日常版提示词，读该门店历史档案作背景 + 前一次行动策略与闭环）。
-4. 单个模块校验失败时，仅用该模块的专属提示词修复一次；其他模块结果不受影响。
+4. 单个模块校验失败时，仅用该模块的专属提示词修复一次；其他模块结果不受影响。修复后仍不通过则降级写回最后候选（`validation_degraded`，见核心原则），降级渲染/写回失败才回退转人工。
 5. `--review flagged` 下只复跑高风险模块；业务判断骨架不一致时执行第三次独立分析，第三次与前两次之一一致则按多数结果处理。复核第二/第三跑必须与首跑使用完全相同的上下文（历史/地址/纠正/速记/模式/行动历史）。
 6. 仅把通过校验的字段按 `record_id` 更新回原记录，随后逐字段复读；store-profile 写回后自动同步 01 门店主档。
 7. 实时查看 `runs/<时间戳>/events.jsonl` 的模块级状态；完成后查看 `done.jsonl`、`manual.jsonl`、`errors.jsonl` 和 `run_manifest.json`。
-8. 用 `--rescue latest` 只重处理上一轮首轮硬校验失败模块；默认同一根运行只允许一轮 rescue，仍失败则转人工。人工结果仍须通过同一校验器。
+8. 用 `--rescue latest` 只重处理上一轮首轮硬校验失败模块（含降级写回的模块：重跑通过即覆盖为合格结果）；默认同一根运行只允许一轮 rescue，仍失败则保持降级输出并提示人工复核。人工结果仍须通过同一校验器。
 
 ## 常用命令
 
@@ -71,6 +71,9 @@ python scripts/pipeline.py --profile default --view <view_id> --rescue latest
 
 # 只有确认额外模型消耗后，才显式提高同一根运行的rescue预算
 python scripts/pipeline.py --profile default --view <view_id> --rescue latest --max-rescue-rounds 2
+
+# 禁用校验失败的降级写回（恢复旧版行为：validation_failed 转人工、字段留空）
+python scripts/pipeline.py --profile default --view <view_id> --modules all --no-degrade
 ```
 
 七个实际请求模块（首访模式全部使用；日常模式只用其中四个）：
@@ -97,7 +100,7 @@ python scripts/pipeline.py --profile default --view <view_id> --rescue latest --
 - 默认模型为 `deepseek-v4-pro`，默认 `workers=16`；并发单元是“record_id × module”，所以单条录音的模块也可并发。风险复跑/第三裁决仍在各自模块内部顺序执行，写同一张表仍串行。**同一门店的记录串行处理**（日常模式读历史/写回需确定顺序，per-store 锁），后一条分析一定能看到前一条刚写完的历史。
 - 历史读取只取**早于当前记录进店时间**的记录（`_earlier_than` 过滤），补录/重跑不会读到未来记录（时间穿越防护）；历史时间无法解析时不读取。
 - 单模块首轮最多2次模型调用；风险双跑与第三跑各自最多2次。默认复核不收敛会写入首轮合格结果并产生 `review_fallback_primary`，不会无限循环；严格模式产生 `review_disputed` 并停止该模块。
-- `events.jsonl` 实时记录每个模块的 `queued → started → primary_validated → ready_to_write → written`，或 `validation_failed/review_fallback_primary/review_disputed/exception`，不必等待整条录音结束才能定位进度。
+- `events.jsonl` 实时记录每个模块的 `queued → started → primary_validated → ready_to_write → written`，或 `validation_degraded → degraded_ready_to_write → validation_degraded_written`（降级写回）、`validation_failed/review_fallback_primary/review_disputed/exception`，不必等待整条录音结束才能定位进度。
 - `--rescue` 不自动递归；跨进程读取 `run_manifest.json` 累计轮次，默认同一根运行最多1轮。提高预算必须显式传入 `--max-rescue-rounds`。
 - `核心金句`基于连续销售原话删除语气词、重复词并轻度梳理语序，禁止新增事实或改变原意；`话术亮点`和`谈判逻辑链`保持不动。
 - 写同一张表时串行提交；分析可以并发。
@@ -135,36 +138,3 @@ python scripts/self_test.py
 python -m py_compile scripts/pipeline.py scripts/knowledge.py scripts/knowledge_check.py
 python scripts/knowledge_check.py
 ```
-
-
-## 执行注意事项与坑（多次实战踩坑沉淀，勿重犯）
-
-### 环境与密钥
-- 定时任务启动不继承用户 shell 环境变量；模型密钥经 `llm_config_path` 共享文件或环境变量读取，**绝不写入配置、日志、飞书或命令参数**。
-
-### 命令行长度（#9）
-- 超长转写写回失败根因：lark-cli `.cmd` 包装经 cmd.exe 时参数上限 8191 字符。`update_record` 已**逐字段写**（每次单字段 JSON），配合 `_resolve_lark_bin` 解析 `.exe` 直调（32767 上限）规避；460 行超长转写单字段写正常。改代码时不要回归成多字段合并一次传。
-
-### 有效性过滤（#10 关联）
-- 分析流水线跳过「是否有效对话」≠ 空/有效的记录（`not in ("", "有效")` 即跳过）。ASR 侧 relabel 后已自动补判有效性；历史记录有效性为空时分析不跳过（会照常分析），但按规则应先补判。
-- 字段为空（未判定）≠ 无效——不要把空值当无效处理，否则会误跳过待判定的新记录（曾有过这类 bug）。
-
-### 并行会话冲突
-- 多个会话同时跑分析会互相干扰：同一批记录两边都分析、写回相互覆盖、01 主档同步重复执行。同一批数据只由一个会话跑；robocopy 备份在 Git Bash 循环 exit=16 是假失败，单条跑 + git status 核实。
-
-### 超长录音一致性瓶颈
-- 460 行（约 1.5 万字）转写下，模型自相矛盾（把「角色纠正为销售」的发声段当客户证据引用、重复纠正）会导致校验反复失败，重试 5+ 次仍不收敛。这是模型长上下文能力边界，不是代码 bug——该字段转人工（飞书看转写手填），不要死磕。
-
-### 历史读取防护
-- 历史档案/行动读取只取**早于当前记录进店时间**的记录（防补录/重跑时间穿越）；同一门店记录按 per-store 锁串行处理（后一条能看到前一条刚写的历史）。
-
-
-## 部署（新机器从零安装）
-
-完整步骤见 [references/deployment.md](references/deployment.md)（本 skill 与 `lark-sales-audio-asr-scripted` 配套部署）。要点：
-
-- 上游依赖 ASR skill（转写+角色归类先行），两 skill 一起装。
-- **LLM 凭证**：`api_url` 走火山方舟网关（Ark），`api_key` 留空、运行时从 `ARK_API_KEY` 环境变量读；模型默认 `deepseek-v4-pro`。
-- **环境变量 6 个（setx 用户级）**：`LLM_API_URL` / `ARK_API_KEY` / `LAS_API_KEY` / `LASUTIL_PATH` / `TENCENT_ASR_SECRET_ID` / `TENCENT_ASR_SECRET_KEY`；**setx 只影响新进程**，定时任务场景先 `source` ASR skill 里的 `env-loader.sh`（从注册表加载，不硬编码密钥）。
-- **知识库**：`knowledge_root` 指向 Obsidian 仓库 `knowledge/a2/`（a2 品牌方专用），目录不存在时注入自动关闭。
-- **凭证与表 ID 不入公开仓库**；config.local.json 含真实表 ID。

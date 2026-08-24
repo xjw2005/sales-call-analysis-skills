@@ -168,6 +168,7 @@ python scripts/pipeline.py --profile default --view <view_id> --preflight
 10. **relabel 不判有效性**:`--relabel-run` 只做角色归类 + 写回转写,**不判「是否有效对话」**。analysis 只处理有效性=「有效」的记录,有效性为空的会被跳过。relabel 后需手动给记录设「是否有效对话=有效」(用 lark-cli record-upsert 批量设),否则 analysis 的 record_tasks 会偏少。
 11. **analysis 默认不覆盖已有内容**:模块字段已有内容的记录,analysis 默认跳过(只填完全为空的模块)。需重新分析时用 `--overwrite <modules>`。判断哪些待分析:跑 preflight 看 record_tasks;读飞书字段确认是否为空。
 12. **concerns 模块校验易失败**:LLM 输出的关心类目归因偶尔不通过硬校验(角色纠正冲突),走 review_fallback_primary(保留首轮,正常)或 validation_failed(转人工)。这是模型输出质量问题,非环境问题,skill 有 rescue 机制,不阻断其他模块。
+13. **asr_failed 重试陷阱(火山 LAS)**:`asr_failed` 是终态,`--submit-run` 只重试 `status in {prepared, submit_error} 且无 task_id` 的记录。重试 asr_failed 必须**同时做两步**:(a) 改 state.json 该记录 `status→prepared`、`task_id→None`,并清掉 error/business_code/submitted_at/last_polled_at;(b) **删除 `records/<rid>/submit.json`**。否则 `submit_run` 开头的「从 submit.json 恢复 task_id」逻辑(pipeline.py L688-701)会把旧的失败 task_id 读回来,导致 `submit_one` 误判「已有 task_id」直接跳过、重试无效(重试后 task_id 仍是旧值)。常见 asr_failed 原因是 `Audio.DownloadFailed`(LAS 侧下载音频 Read timed out,网络抖动,非本地问题);重试会重新 file-upload 生成新 presigned_url,通常可绕过。
 
 ## 问题速查索引
 
@@ -184,3 +185,4 @@ python scripts/pipeline.py --profile default --view <view_id> --preflight
 | 写回飞书失败,lark-cli 返回空 | 命令行太长(cmd.exe 8191 限制) | 9 |
 | analysis record_tasks 偏少 | 有效性为空(relabel 没判) 或 模块已有内容 | 10, 11 |
 | concerns validation_failed | LLM 输出校验不通过(模型质量问题) | 12 |
+| 重试 asr_failed 后 task_id 仍是旧值、重试无效 | submit.json 残留旧 task_id 未删,被恢复逻辑读回 | 13 |

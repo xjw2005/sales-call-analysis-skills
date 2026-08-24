@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RUNS = ROOT / "runs"
 CONFIG = ROOT / "config.local.json"
 DIALECT_PROMPT = ROOT / "references" / "dialect-to-mandarin.md"
-ROLE_SKILL = Path(r"C:\Users\12909\.codex\skills\classify-sales-call-roles")
+ROLE_SKILL = Path(os.environ.get("CLASSIFY_ROLE_SKILL_PATH", str(ROOT.parent / "classify-sales-call-roles")))
 ROLE_BUILD = ROLE_SKILL / "scripts" / "build_role_profile.py"
 ROLE_APPLY = ROLE_SKILL / "scripts" / "apply_role_map.py"
 ROLE_AUDIT = ROLE_SKILL / "scripts" / "audit_role_map.py"
@@ -113,19 +113,16 @@ def save_state(run_dir: Path, state: dict[str, Any]) -> None:
         atomic_json(run_dir / "state.json", state)
 
 
-def resolve_lark() -> str:
-    found = shutil.which("lark-cli") or "lark-cli"
-    if found.lower().endswith((".cmd", ".bat")):
-        try:
-            match = re.search(
-                r'"([^"]*lark-cli\.exe)"',
-                Path(found).read_text(encoding="utf-8", errors="replace"),
-            )
-            if match and Path(os.path.expandvars(match.group(1))).exists():
-                return os.path.expandvars(match.group(1))
-        except OSError:
-            pass
-    return found
+def resolve_lark() -> list[str]:
+    # 直接用 node 运行 run.js，绕过 cmd.exe 的 8191 字符命令行限制（大文本写回会触发「命令行太长」）
+    found = shutil.which("lark-cli")
+    if found:
+        lark_dir = Path(found).resolve().parent
+        run_js = lark_dir / "node_modules" / "@larksuite" / "cli" / "scripts" / "run.js"
+        if run_js.exists():
+            node = lark_dir / "node.exe"
+            return [str(node) if node.exists() else "node", str(run_js)]
+    return [found or "lark-cli"]
 
 
 LARK = resolve_lark()
@@ -146,7 +143,7 @@ def json_from_output(output: str, label: str) -> dict[str, Any]:
 
 
 def lark(*args: str, retries: int = 3, cwd: Path | None = None) -> dict[str, Any]:
-    command = [LARK, *args, "--as", "user", "--format", "json"]
+    command = [*LARK, *args, "--as", "user", "--format", "json"]
     last = ""
     for attempt in range(retries):
         proc = subprocess.run(
@@ -1725,16 +1722,6 @@ def relabel_run(
         if result.get("status") == "role_labeled" and not dry_run:
             try:
                 write_transcript(state["profile"], rid, result["_labeled"], True)
-                try:
-                    # relabel 后补判有效性（#10 漏洞修复）：字段为空才写，人工改过不覆盖
-                    validity_verdict = judge_validity(
-                        run_cfg, state["profile"], result["_labeled"],
-                        duration_seconds=record.get("duration_seconds"),
-                    )
-                    write_validity(state["profile"], rid, result["_labeled"])
-                    result["validity"] = validity_verdict["value"]
-                except Exception as exc:
-                    result["validity_error"] = str(exc)
                 result.update({"status": "written", "written_at": now(), "error": None})
             except Exception as exc:
                 result.update({"status": "write_error", "error": str(exc)})
