@@ -168,6 +168,8 @@ python scripts/pipeline.py --profile default --view <view_id> --preflight
 10. **relabel 不判有效性**:`--relabel-run` 只做角色归类 + 写回转写,**不判「是否有效对话」**。analysis 只处理有效性=「有效」的记录,有效性为空的会被跳过。relabel 后需手动给记录设「是否有效对话=有效」(用 lark-cli record-upsert 批量设),否则 analysis 的 record_tasks 会偏少。
 11. **analysis 默认不覆盖已有内容**:模块字段已有内容的记录,analysis 默认跳过(只填完全为空的模块)。需重新分析时用 `--overwrite <modules>`。判断哪些待分析:跑 preflight 看 record_tasks;读飞书字段确认是否为空。
 12. **concerns 模块校验易失败**:LLM 输出的关心类目归因偶尔不通过硬校验(角色纠正冲突),走 review_fallback_primary(保留首轮,正常)或 validation_failed(转人工)。这是模型输出质量问题,非环境问题,skill 有 rescue 机制,不阻断其他模块。
+13. **超长录音全模块「输出不是合法JSON: Expecting ',' delimiter」**(2026-08-17 实例:51 分钟/693 句录音,7 模块全失败,rescue 无效):根因是 DeepSeek API **默认输出上限 8192 token**;超长转写会让模型在 `_scope.role_corrections` 逐句列角色修正、证据 ID 列表也随之膨胀,单模块输出可达 ~18K token,JSON 中途被截断(finish_reason=length)。诊断方法:单模块补测一次调用,看 `finish_reason` 与 `completion_tokens`,length+8192 即命中。**已修复**:`pipeline.py` 的 `call_llm` 显式传 `max_tokens=MAX_OUTPUT_TOKENS(32768)`,服务端拒绝该参数时走 `_DROP` 自动降级重试;按实际用量计费,普通录音不受影响。实测 32K 下模型 18,409 token 自然收尾(finish_reason=stop)。**连带风险**:超长录音单条烧 ~130K 输出 token,低余额账户会中途 HTTP 402 Insufficient Balance,余额恢复后直接重跑空模块即可(preflight 只挑空字段,不会重复计费已写模块)。无需切块分段:单上下文分析语义最完整,32K 上限对 50 分钟级录音已够;若未来出现 2 小时级录音再考虑分段。
+14. **analysis preflight/正常跑抛 `UnboundLocalError: rescue_forced`**(2026-08-19 实例,定时任务 23:55 触发):`pipeline.py` 的 `rescue_forced` 变量只在 `if args.rescue:` 分支内被赋值(`rescue_map, rescue_forced = rescue_targets(rescue_path)`),但主循环里 `elif rescue_forced and rid in rescue_forced ...`(约 line 2489)无条件引用它;不带 `--rescue` 参数时变量未初始化即抛 `UnboundLocalError: cannot access local variable 'rescue_forced'`。**已修复**:在 `rescue_map: dict[str, set[str]] | None = None` 声明后紧接初始化 `rescue_forced: dict[str, set[str]] = {}`,无 rescue 时为空 dict,主循环条件为 False,行为不变。这是 `--rescue` 特性(降级写回强制重跑)新增时引入的回归,任何会「只在分支内赋值的局部变量」在主循环无条件引用都会踩;改动涉及 rescue 相关分支后,应同时跑一次「带 `--rescue latest`」和「不带 rescue」两种 preflight 验证。
 
 ## 问题速查索引
 
@@ -184,3 +186,6 @@ python scripts/pipeline.py --profile default --view <view_id> --preflight
 | 写回飞书失败,lark-cli 返回空 | 命令行太长(cmd.exe 8191 限制) | 9 |
 | analysis record_tasks 偏少 | 有效性为空(relabel 没判) 或 模块已有内容 | 10, 11 |
 | concerns validation_failed | LLM 输出校验不通过(模型质量问题) | 12 |
+| 超长录音全模块 JSON 截断 | API 默认输出上限 8192,已修(max_tokens=32768) | 13 |
+| 模型调用 HTTP 402 Insufficient Balance | DeepSeek 账户余额耗尽,充值后重跑空模块 | 13 |
+| preflight 抛 UnboundLocalError: rescue_forced | 不带 --rescue 时 rescue_forced 未初始化(已修) | 14 |

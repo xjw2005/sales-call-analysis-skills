@@ -13,3 +13,6 @@ __pycache__/
 *.flac
 *.pcm
 *.raw
+
+# 本地配置（含密钥/飞书 token），不入库
+config.local.json
