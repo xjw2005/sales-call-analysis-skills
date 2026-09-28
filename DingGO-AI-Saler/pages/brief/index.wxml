@@ -1,0 +1,51 @@
+<view class="page gradient-bg" wx:if="{{brief}}">
+  <view class="container">
+    <view class="head">
+      <view class="store">{{brief.store.name}}</view>
+      <view class="faint">{{brief.isFirst ? '第一次拜访' : '上次拜访：' + brief.lastText}}</view>
+    </view>
+
+    <view wx:if="{{brief.oneLine}}" class="card">
+      <view class="card-title">这家店是什么样<ai-badge /></view>
+      <view class="text">{{brief.oneLine}}</view>
+      <view wx:if="{{brief.concerns.length}}" class="chips">
+        <text class="faint">老板关心：</text>
+        <text wx:for="{{brief.concerns}}" wx:key="*this" class="tag primary chip">{{item}}</text>
+      </view>
+      <view class="link" bindtap="openStore">查看完整门店档案 ›</view>
+    </view>
+
+    <view wx:if="{{brief.openTodos.length}}" class="card warn-card">
+      <view class="card-title">上次答应的事，做了吗？</view>
+      <view wx:for="{{brief.openTodos}}" wx:key="id" class="todo row between">
+        <text class="todo-text">{{item.topic}}：{{item.action}}</text>
+        <text class="tag {{item.due.tone}}">{{item.due.text}}</text>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="card-title">这次拜访的目标</view>
+      <view wx:for="{{brief.goals}}" wx:key="*this" class="goal">🎯 {{item}}</view>
+    </view>
+
+    <view wx:if="{{brief.opening}}" class="card">
+      <view class="card-title">开场可以这样说</view>
+      <view class="quote">“{{brief.opening}}”</view>
+    </view>
+
+    <view class="card">
+      <view class="row between"><view class="card-title">这次建议问的问题</view><text class="btn-soft" bindtap="copyQuestions">复制</text></view>
+      <view wx:for="{{brief.questions}}" wx:key="*this" class="q"><text class="q-num">{{index + 1}}</text><text class="q-text">{{item}}</text></view>
+    </view>
+
+    <view wx:for="{{brief.objections}}" wx:key="name" class="card">
+      <view class="card-title">可能会被问到：{{item.name}}</view>
+      <view class="faint says">客户可能说：“{{item.says}}”</view>
+      <view wx:for="{{item.points}}" wx:key="*this" wx:for-item="p" class="point">· {{p}}</view>
+      <view class="quote">“{{item.script}}”</view>
+      <view class="link" data-name="{{item.name}}" bindtap="practice">先陪练一下 ›</view>
+    </view>
+    <view style="height:200rpx"></view>
+  </view>
+  <view class="bottom-bar"><view class="btn-primary" bindtap="record">到店了，开始录音</view></view>
+</view>

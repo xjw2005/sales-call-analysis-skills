@@ -1,0 +1,10 @@
+<view class="container">
+  <scroll-view scroll-x class="chips" enhanced show-scrollbar="{{false}}">
+    <view wx:for="{{filters}}" wx:key="*this" class="chip {{active === index ? 'on' : ''}}" data-i="{{index}}" bindtap="pick">{{item}}</view>
+  </scroll-view>
+  <visit-card wx:for="{{shown}}" wx:key="id" visit="{{item}}" />
+  <empty-state wx:if="{{!shown.length}}" compact title="暂无拜访录音" desc="录音即享四大分析：需求洞察、关心点、话术评分、门店档案">
+    <view class="btn-ghost start" bindtap="record">开始第一次拜访</view>
+  </empty-state>
+  <view class="tab-safe"></view>
+</view>

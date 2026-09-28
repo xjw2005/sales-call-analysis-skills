@@ -1,0 +1,9 @@
+{
+  "navigationBarTitleText": "拜访详情",
+  "usingComponents": {
+    "status-timeline": "/components/status-timeline/index",
+    "score-ring": "/components/score-ring/index",
+    "empty-state": "/components/empty-state/index",
+    "ai-badge": "/components/ai-badge/index"
+  }
+}

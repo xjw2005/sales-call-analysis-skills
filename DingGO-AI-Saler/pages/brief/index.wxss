@@ -1,0 +1,16 @@
+.page { min-height: 100vh; }
+.head { padding: 24rpx 8rpx; }
+.store { font-size: 44rpx; font-weight: 700; margin-bottom: 8rpx; }
+.text { font-size: 29rpx; line-height: 1.7; }
+.chips { margin-top: 16rpx; display: flex; flex-wrap: wrap; align-items: center; gap: 12rpx; }
+.link { color: #5b55e8; font-size: 26rpx; margin-top: 20rpx; }
+.warn-card { background: #fff8ea; }
+.todo { padding: 12rpx 0; gap: 16rpx; font-size: 28rpx; }
+.todo-text { flex: 1; line-height: 1.6; }
+.goal { font-size: 28rpx; line-height: 1.8; }
+.quote { background: #f6f6fb; border-radius: 20rpx; padding: 20rpx 24rpx; font-size: 28rpx; line-height: 1.7; color: #2d2a9e; margin-top: 12rpx; }
+.q { display: flex; padding: 14rpx 0; font-size: 29rpx; line-height: 1.6; }
+.q-num { width: 40rpx; height: 40rpx; border-radius: 50%; background: #eeedfd; color: #5b55e8; font-size: 22rpx; text-align: center; line-height: 40rpx; margin-right: 16rpx; flex-shrink: 0; margin-top: 4rpx; }
+.q-text { flex: 1; }
+.says { margin-bottom: 12rpx; line-height: 1.6; }
+.point { font-size: 27rpx; line-height: 1.8; color: #4a4d6b; }

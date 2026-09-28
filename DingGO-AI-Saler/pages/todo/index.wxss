@@ -1,0 +1,7 @@
+.store { font-size: 26rpx; color: #5b55e8; }
+.topic { font-size: 32rpx; font-weight: 600; margin: 14rpx 0 8rpx; }
+.action { font-size: 28rpx; line-height: 1.7; margin-bottom: 8rpx; }
+.btns { justify-content: flex-end; gap: 16rpx; margin-top: 20rpx; }
+.fb { padding: 12rpx 28rpx; border-radius: 999rpx; border: 2rpx solid #e1e2ec; font-size: 26rpx; color: #4a4d6b; }
+.fb-primary { padding: 12rpx 28rpx; border-radius: 999rpx; background: #5b55e8; color: #fff; font-size: 26rpx; }
+.is-done .topic, .is-done .action { color: #a7aac2; text-decoration: line-through; }

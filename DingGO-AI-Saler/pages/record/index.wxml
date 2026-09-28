@@ -1,0 +1,66 @@
+<view class="page gradient-bg">
+  <view class="container">
+    <view class="title">拜访录音</view>
+    <view class="subtitle">录完即自动转写 · 智能分析 · 更新门店档案</view>
+
+    <view class="card form">
+      <picker range="{{stores}}" range-key="name" value="{{storeIndex}}" bindchange="onStore">
+        <view class="row between field"><text class="muted">门店</text><text class="val">{{storeIndex >= 0 ? stores[storeIndex].name : '请选择门店'}} ›</text></view>
+      </picker>
+      <view wx:if="{{!stores.length}}" class="field"><text class="btn-soft" bindtap="addStore">+ 先添加门店</text></view>
+      <picker range="{{stages}}" value="{{stageIndex}}" bindchange="onStage">
+        <view class="row between field"><text class="muted">拜访阶段</text><text class="val">{{stages[stageIndex]}} ›</text></view>
+      </picker>
+      <view wx:if="{{isFirst}}" class="row between field">
+        <text class="muted">是否达成合作</text>
+        <view class="row gap">
+          <view class="opt {{cooperated === '是' ? 'on' : ''}}" data-v="是" bindtap="onCoop">是</view>
+          <view class="opt {{cooperated === '否' ? 'on' : ''}}" data-v="否" bindtap="onCoop">否</view>
+        </view>
+      </view>
+      <view class="faint mode-tip">{{isFirst ? '首访：7 项分析（需求、关心点、话术评分、金句、档案、行动）' : '日常：4 项分析（需求、关心点、档案累计更新、行动闭环）'}}</view>
+    </view>
+
+    <!-- 录音区 -->
+    <view class="recorder">
+      <block wx:if="{{importName}}">
+        <view class="file">🎧 {{importName}}</view>
+        <view class="timer">{{timeText}}</view>
+      </block>
+      <block wx:else>
+        <view class="timer">{{timeText}}</view>
+        <view class="rec-state faint">{{state === 'idle' ? '点击开始录音' : state === 'recording' ? '录音中 · 点击暂停' : state === 'paused' ? '已暂停 · 点击继续' : '录音已结束，共 ' + segments.length + ' 段'}}</view>
+        <view class="rec-btn {{state}}" bindtap="tapRecord">
+          <view class="rec-inner">
+            <image wx:if="{{state === 'idle' || state === 'stopped'}}" class="rec-icon" src="/assets/icons/mic.svg" />
+            <view wx:elif="{{state === 'recording'}}" class="pause-icon"><view></view><view></view></view>
+            <view wx:else class="play-icon"></view>
+          </view>
+        </view>
+        <view wx:if="{{state === 'recording' || state === 'paused'}}" class="btn-ghost stop" bindtap="finish">结束录音</view>
+      </block>
+      <view wx:if="{{state === 'stopped'}}" class="faint link" bindtap="reset">重新录音</view>
+      <view wx:if="{{state === 'idle' && !importName}}" class="faint link" bindtap="chooseFile">从聊天记录导入音频</view>
+    </view>
+
+    <view class="card">
+      <view class="card-title">门店档案纠正（选填）</view>
+      <textarea class="note" placeholder="记录录音里没说清的门店事实，例如面积、主营品类。AI 会以此为准。" placeholder-class="ph" auto-height maxlength="500" bindinput="onNote" />
+    </view>
+
+    <!-- 步骤条（对应 ①拍药识别 ②添加药品 ③药箱管理） -->
+    <view class="steps row">
+      <view class="step {{step >= 0 ? 'on' : ''}}"><text class="num">1</text>录音</view>
+      <view class="dash"></view>
+      <view class="step {{step >= 1 ? 'on' : ''}}"><text class="num">2</text>转写整理</view>
+      <view class="dash"></view>
+      <view class="step {{step >= 2 ? 'on' : ''}}"><text class="num">3</text>AI 分析</view>
+    </view>
+    <view style="height:200rpx"></view>
+  </view>
+
+  <view class="bottom-bar">
+    <view class="btn-primary {{state !== 'stopped' || submitting ? 'disabled' : ''}}" bindtap="submit">上传并分析</view>
+    <view class="faint hint">上传后先预估识别费用，确认后才开始识别</view>
+  </view>
+</view>
