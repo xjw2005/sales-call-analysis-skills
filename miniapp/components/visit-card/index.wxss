@@ -1,0 +1,5 @@
+.vc { background: #fff; border-radius: 32rpx; padding: 28rpx 32rpx; margin-bottom: 20rpx; }
+.name { font-size: 32rpx; font-weight: 600; }
+.meta { margin-top: 12rpx; display: flex; align-items: center; gap: 12rpx; }
+.summary { margin-top: 16rpx; font-size: 26rpx; color: #6b6f8e; line-height: 1.6; }
+.score { margin-top: 16rpx; gap: 12rpx; font-size: 26rpx; }

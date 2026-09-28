@@ -1,0 +1,15 @@
+<view class="vc" bindtap="open">
+  <view class="row between">
+    <view class="name">{{showStore ? visit.storeName : visit.stage}}</view>
+    <text class="tag {{status.tone}}">{{status.text}}</text>
+  </view>
+  <view class="meta">
+    <text wx:if="{{showStore}}" class="tag {{isFirst ? 'primary' : 'muted'}}">{{visit.stage}}</text>
+    <text class="faint">{{time}} · 录音 {{dur}}</text>
+  </view>
+  <view wx:if="{{summary}}" class="summary">{{summary}}</view>
+  <view wx:if="{{grade}}" class="score row">
+    <text class="grade {{grade}}">{{grade}}</text>
+    <text class="muted">合作进展 {{score}} 分</text>
+  </view>
+</view>

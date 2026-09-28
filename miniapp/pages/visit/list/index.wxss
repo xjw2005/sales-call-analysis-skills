@@ -1,0 +1,4 @@
+.chips { white-space: nowrap; margin: 16rpx 0 24rpx; }
+.chip { display: inline-block; padding: 12rpx 32rpx; margin-right: 16rpx; border-radius: 999rpx; background: #fff; color: #6b6f8e; font-size: 26rpx; }
+.chip.on { background: #5b55e8; color: #fff; }
+.start { margin-top: 32rpx; }

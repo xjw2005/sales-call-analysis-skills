@@ -1,0 +1,10 @@
+.page { min-height: 100vh; }
+.search { background: #fff; border-radius: 999rpx; height: 80rpx; padding: 0 28rpx; margin: 16rpx 0 24rpx; }
+.search-input { flex: 1; margin-left: 12rpx; font-size: 28rpx; }
+.ph { color: #a7aac2; }
+.pill-avatar.small { width: 64rpx; height: 64rpx; line-height: 64rpx; background: #eeedfd; color: #5b55e8; }
+.name { font-size: 32rpx; font-weight: 600; }
+.one-line { margin: 16rpx 0 8rpx; font-size: 28rpx; color: #1c1b4b; line-height: 1.6; }
+.meta { margin-top: 6rpx; }
+.none { text-align: center; padding: 40rpx; }
+.add-bar { position: fixed; left: 40rpx; right: 40rpx; bottom: calc(176rpx + env(safe-area-inset-bottom)); }

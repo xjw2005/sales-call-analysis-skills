@@ -1,0 +1,15 @@
+{
+  "description": "AI 赋能销售云 · 门店拜访小程序",
+  "projectname": "sales-cloud-miniapp",
+  "appid": "touristappid",
+  "compileType": "miniprogram",
+  "libVersion": "3.4.0",
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "urlCheck": false
+  },
+  "condition": {}
+}

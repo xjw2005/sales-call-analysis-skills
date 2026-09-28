@@ -1,0 +1,9 @@
+.page { min-height: 100vh; }
+.user { padding: 40rpx 8rpx; gap: 28rpx; }
+.avatar { width: 120rpx; height: 120rpx; border-radius: 50%; background: #5b55e8; color: #fff; font-size: 48rpx; font-weight: 700; text-align: center; line-height: 120rpx; }
+.name { font-size: 40rpx; font-weight: 700; margin-bottom: 8rpx; }
+.stats { justify-content: space-around; text-align: center; }
+.num { font-size: 40rpx; font-weight: 700; color: #2d2a9e; margin-bottom: 6rpx; }
+.menu { padding: 0 32rpx; }
+.menu-item { padding: 32rpx 0; border-bottom: 2rpx solid #f0f1f6; font-size: 30rpx; }
+.menu-item:last-child { border-bottom: none; }

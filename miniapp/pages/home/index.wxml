@@ -1,0 +1,91 @@
+<view class="page gradient-bg">
+  <!-- 自定义导航：☰ 助手 …… [新对话] -->
+  <view style="height:{{statusBarHeight}}px"></view>
+  <view class="nav container row" style="height:{{navHeight}}px">
+    <view class="menu" bindtap="toggleDrawer"><view></view><view></view><view class="short"></view></view>
+    <text class="nav-title">助手</text>
+    <view class="new-chat" wx:if="{{messages.length}}" bindtap="newChat">⊕ 新对话</view>
+  </view>
+
+  <scroll-view class="chat" scroll-y scroll-into-view="{{scrollTo}}" scroll-with-animation enhanced show-scrollbar="{{false}}">
+    <view class="container">
+      <!-- 待处理横幅 -->
+      <view wx:if="{{pendingCount}}" class="banner row between" bindtap="openPending">
+        <view>
+          <view class="banner-title">{{pendingCount}} 条录音待确认识别费用</view>
+          <view class="faint">确认后自动开始转写与 AI 分析</view>
+        </view>
+        <view class="banner-arrow">→</view>
+      </view>
+
+      <!-- 欢迎卡（对应“Hi 我是阿福”） -->
+      <view class="hero card">
+        <view class="date"><view class="date-m">{{month}}月</view><view class="date-d">{{day}}</view></view>
+        <view class="avatar">AI</view>
+        <view class="hi">Hi</view>
+        <view class="greet">我是你的销售助手</view>
+        <view class="muted intro">门店档案、客户关心点、话术评分、下一步行动，问我就行；也可以直接开始一次拜访录音。</view>
+
+        <view class="row store-row">
+          <text class="faint ctx">当前门店</text>
+          <view class="pill" bindtap="switchStore">
+            <view class="pill-avatar">店</view>
+            <view class="pill-name">{{currentStore ? currentStore.name : '选择门店'}}</view>
+            <text class="caret">▾</text>
+          </view>
+          <view class="pill-add" bindtap="addStore">+</view>
+        </view>
+
+        <view class="grid">
+          <view wx:for="{{prompts}}" wx:key="*this" class="grid-item" data-q="{{item}}" bindtap="tapPrompt">
+            <text class="gi-icon gi-{{index}}">{{index === 0 ? '店' : index === 1 ? '?' : index === 2 ? '→' : '分'}}</text>{{item}}
+          </view>
+        </view>
+      </view>
+
+      <!-- 对话 -->
+      <view wx:for="{{messages}}" wx:key="id" class="msg {{item.role}}">
+        <view wx:if="{{item.role === 'ai'}}" class="msg-avatar">AI</view>
+        <view class="bubble">
+          <text user-select>{{item.text}}</text>
+          <view wx:if="{{item.role === 'ai'}}" class="ai-note">AI 生成，仅供参考</view>
+        </view>
+        <view wx:if="{{item.role === 'ai' && item.suggestions.length && index === messages.length - 1}}" class="suggest">
+          <view wx:for="{{item.suggestions}}" wx:key="*this" wx:for-item="s" class="btn-soft" data-q="{{s}}" bindtap="tapPrompt">{{s}}</view>
+        </view>
+      </view>
+      <view wx:if="{{thinking}}" class="msg ai">
+        <view class="msg-avatar">AI</view>
+        <view class="bubble dots"><view></view><view></view><view></view></view>
+      </view>
+      <view id="bottom" style="height:24rpx"></view>
+    </view>
+  </scroll-view>
+
+  <!-- 底部输入条（对应“对话已开启隐私保护 🎤 📷 +”） -->
+  <view class="input-bar row">
+    <view class="rec-btn" bindtap="startRecord"><image class="rec-icon" src="/assets/icons/mic.svg" />录音</view>
+    <input class="input" value="{{input}}" placeholder="问问这家门店的情况…" placeholder-class="ph" confirm-type="send" bindinput="onInput" bindconfirm="submit" />
+    <view wx:if="{{input}}" class="send" bindtap="submit">发送</view>
+    <view wx:else class="plus" bindtap="moreActions">+</view>
+  </view>
+  <view class="tab-safe"></view>
+
+  <!-- 侧滑抽屉：我的门店 + 历史对话 -->
+  <view wx:if="{{drawerOpen}}" class="mask" bindtap="toggleDrawer"></view>
+  <view class="drawer {{drawerOpen ? 'open' : ''}}" catchtap="noop">
+    <view style="height:{{statusBarHeight + navHeight}}px"></view>
+    <view class="drawer-title">我的门店</view>
+    <view wx:for="{{stores}}" wx:key="id" class="drawer-store row" data-id="{{item.id}}" bindtap="pickStore">
+      <view class="pill-avatar small">店</view>
+      <text>{{item.name}}</text>
+      <text wx:if="{{currentStore && currentStore.id === item.id}}" class="tag primary cur">当前</text>
+    </view>
+    <view class="drawer-title">对话记录</view>
+    <view wx:for="{{histories}}" wx:key="id" class="drawer-chat row between" data-id="{{item.id}}" bindtap="openHistory">
+      <text class="dc-title">💬 {{item.title}}</text>
+      <text class="faint">{{item.time}}</text>
+    </view>
+    <view wx:if="{{!histories.length}}" class="faint">还没有对话</view>
+  </view>
+</view>

@@ -1,0 +1,22 @@
+<view class="container">
+  <view class="card form">
+    <view class="field">
+      <view class="label">门店名称 <text class="req">*</text></view>
+      <input class="input" placeholder="例如：宝贝乐母婴店" placeholder-class="ph" data-key="name" bindinput="onField" />
+    </view>
+    <picker mode="region" level="city" bindchange="onRegion">
+      <view class="field">
+        <view class="label">所在省市</view>
+        <view class="input {{province ? '' : 'ph'}}">{{province ? province + ' ' + city : '请选择'}}</view>
+      </view>
+    </picker>
+    <view class="field">
+      <view class="label row between">详细地址<text class="btn-soft" bindtap="chooseLocation">地图选点</text></view>
+      <input class="input" value="{{address}}" placeholder="街道门牌号" placeholder-class="ph" data-key="address" bindinput="onField" />
+    </view>
+  </view>
+  <view class="faint tip">地址会作为可信信息写入门店档案「门店基本信息」。</view>
+</view>
+<view class="bottom-bar">
+  <view class="btn-primary {{saving ? 'disabled' : ''}}" bindtap="save">保存门店</view>
+</view>

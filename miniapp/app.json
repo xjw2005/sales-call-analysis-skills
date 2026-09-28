@@ -1,0 +1,35 @@
+{
+  "pages": [
+    "pages/home/index",
+    "pages/store/list/index",
+    "pages/visit/list/index",
+    "pages/me/index",
+    "pages/record/index",
+    "pages/visit/detail/index",
+    "pages/store/detail/index",
+    "pages/store/edit/index"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#F2F3F8",
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "销售云",
+    "backgroundColor": "#F2F3F8"
+  },
+  "tabBar": {
+    "custom": true,
+    "color": "#A7AAC2",
+    "selectedColor": "#1C1B4B",
+    "list": [
+      { "pagePath": "pages/home/index", "text": "助手" },
+      { "pagePath": "pages/store/list/index", "text": "门店" },
+      { "pagePath": "pages/visit/list/index", "text": "拜访" },
+      { "pagePath": "pages/me/index", "text": "我的" }
+    ]
+  },
+  "requiredPrivateInfos": ["chooseLocation"],
+  "permission": {
+    "scope.userLocation": { "desc": "用于选择门店地址" }
+  },
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}
