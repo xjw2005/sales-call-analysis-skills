@@ -1,6 +1,7 @@
 Component({
   data: {
     selected: 0,
+    hidden: false,
     list: [
       { pagePath: '/pages/home/index', text: '助手', icon: 'home' },
       { pagePath: '/pages/store/list/index', text: '门店', icon: 'store' },

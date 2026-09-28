@@ -1,0 +1,10 @@
+.intro { padding: 24rpx 8rpx; line-height: 1.6; }
+.name { font-size: 32rpx; font-weight: 600; }
+.says { margin-top: 8rpx; line-height: 1.5; }
+.body { margin-top: 20rpx; border-top: 2rpx solid #f0f1f6; padding-top: 12rpx; }
+.sub { font-size: 26rpx; font-weight: 600; margin: 16rpx 0 8rpx; }
+.point { font-size: 28rpx; line-height: 1.8; color: #4a4d6b; }
+.quote { background: #f6f6fb; border-radius: 20rpx; padding: 20rpx 24rpx; font-size: 28rpx; line-height: 1.7; color: #2d2a9e; }
+.btns { justify-content: flex-end; gap: 16rpx; margin-top: 20rpx; }
+.fb { padding: 12rpx 28rpx; border-radius: 999rpx; border: 2rpx solid #e1e2ec; font-size: 26rpx; color: #4a4d6b; }
+.fb-primary { padding: 12rpx 28rpx; border-radius: 999rpx; background: #5b55e8; color: #fff; font-size: 26rpx; }

@@ -7,7 +7,12 @@
     "pages/record/index",
     "pages/visit/detail/index",
     "pages/store/detail/index",
-    "pages/store/edit/index"
+    "pages/store/edit/index",
+    "pages/brief/index",
+    "pages/todo/index",
+    "pages/objection/index",
+    "pages/practice/list/index",
+    "pages/practice/chat/index"
   ],
   "window": {
     "navigationBarBackgroundColor": "#F2F3F8",
@@ -20,15 +25,31 @@
     "color": "#A7AAC2",
     "selectedColor": "#1C1B4B",
     "list": [
-      { "pagePath": "pages/home/index", "text": "助手" },
-      { "pagePath": "pages/store/list/index", "text": "门店" },
-      { "pagePath": "pages/visit/list/index", "text": "拜访" },
-      { "pagePath": "pages/me/index", "text": "我的" }
+      {
+        "pagePath": "pages/home/index",
+        "text": "助手"
+      },
+      {
+        "pagePath": "pages/store/list/index",
+        "text": "门店"
+      },
+      {
+        "pagePath": "pages/visit/list/index",
+        "text": "拜访"
+      },
+      {
+        "pagePath": "pages/me/index",
+        "text": "我的"
+      }
     ]
   },
-  "requiredPrivateInfos": ["chooseLocation"],
+  "requiredPrivateInfos": [
+    "chooseLocation"
+  ],
   "permission": {
-    "scope.userLocation": { "desc": "用于选择门店地址" }
+    "scope.userLocation": {
+      "desc": "用于选择门店地址"
+    }
   },
   "sitemapLocation": "sitemap.json",
   "lazyCodeLoading": "requiredComponents"

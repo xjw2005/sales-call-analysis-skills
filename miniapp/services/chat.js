@@ -1,6 +1,7 @@
 const config = require('../config/index');
 const { request, delay } = require('./request');
 const { getStore } = require('./store');
+const { OBJECTIONS } = require('../utils/playbook');
 
 // AI 问答。真实模式：POST /chat，由后端调用大模型并结合门店数据作答（后期可改为流式输出）。
 // 演示模式：按关键词从门店演示数据中拼出回答，只用于看界面效果。
@@ -11,6 +12,12 @@ async function ask({ question, storeId, history = [] }) {
 }
 
 function mockAnswer(q, store) {
+  const objection = Object.keys(OBJECTIONS).find((k) => q.indexOf(k) >= 0)
+    || (/乱价|控价|比价|网上.*便宜/.test(q) && '控价防窜') || (/贵|价格/.test(q) && '价格敏感') || (/利润|赚/.test(q) && '利润空间');
+  if (objection && /怎么|回|应对|说/.test(q)) {
+    const o = OBJECTIONS[objection];
+    return { text: `客户说“${o.says}”时，可以这样回应：\n${o.points.map((p, i) => `${i + 1}. ${p}`).join('\n')}\n\n参考话术：“${o.script}”`, suggestions: ['下一步该做什么？'] };
+  }
   if (!store) return { text: '请先在上方选择一个门店，我会结合这家门店的拜访记录来回答。', suggestions: [] };
   const name = store.name;
   const latest = (store.visits || []).find((v) => v.status === 'done');

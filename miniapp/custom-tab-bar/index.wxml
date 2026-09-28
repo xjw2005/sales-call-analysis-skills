@@ -1,4 +1,4 @@
-<view class="bar">
+<view class="bar" wx:if="{{!hidden}}">
   <view wx:for="{{list}}" wx:key="pagePath" class="item {{selected === index ? 'active' : ''}}" data-index="{{index}}" bindtap="switchTab">
     <image class="icon" src="/assets/icons/{{item.icon}}{{selected === index ? '-active' : ''}}.svg" />
     <view class="text">{{item.text}}</view>

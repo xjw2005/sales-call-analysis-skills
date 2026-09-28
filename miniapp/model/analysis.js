@@ -1,3 +1,4 @@
+// dueDays：行动到期日 = 拜访日 + N 天（真实环境由后端把“周五前”等文字解析成日期）
 // 演示用分析结果，字段结构对齐 sales-call-analysis-scripted/references/output-spec.md
 const t = require('./transcript');
 const ev = (...ids) => ids.map((id) => t.find((u) => u.uid === id));
@@ -55,8 +56,8 @@ const first = {
     reason: '客户明确索要价格表和退货政策，且约定了复访时间。',
     confirmed: ['周五上午把价格表、退货政策发客户微信（销售承诺）', '下周二再次到店拜访（销售承诺）'],
     actions: [
-      { topic: '补齐控价证据', owner: '销售', timeframe: '周五前', action: '整理近三个月控价处理案例和红线价说明，与价格表一起发送', reason: '客户对控价承诺信任度低', acceptance: '客户收到并回复是否认可' },
-      { topic: '复访促成试销', owner: '销售', timeframe: '下周二', action: '带两箱试销协议到店，现场说明退货流程', reason: '客户已表达“能退可以考虑”', acceptance: '签订试销单或明确拒绝原因' },
+      { topic: '补齐控价证据', owner: '销售', timeframe: '周五前', dueDays: 2, action: '整理近三个月控价处理案例和红线价说明，与价格表一起发送', reason: '客户对控价承诺信任度低', acceptance: '客户收到并回复是否认可' },
+      { topic: '复访促成试销', owner: '销售', timeframe: '下周二', dueDays: 6, action: '带两箱试销协议到店，现场说明退货流程', reason: '客户已表达“能退可以考虑”', acceptance: '签订试销单或明确拒绝原因' },
     ],
     revisitValue: '高：客户利润认可、条件明确，复访有望促成首单。',
   },
@@ -76,7 +77,7 @@ const daily = {
     reason: '客户提出试吃装需求，需确认政策后答复。',
     confirmed: ['本周内确认试吃装政策并回复客户'],
     actions: [
-      { topic: '试吃装支持', owner: '销售', timeframe: '本周内', action: '向区域经理确认试吃装配额，确认并发送给客户', reason: '客户反馈顾客想先试', acceptance: '客户收到明确答复' },
+      { topic: '试吃装支持', owner: '销售', timeframe: '本周内', dueDays: 1, action: '向区域经理确认试吃装配额，确认并发送给客户', reason: '客户反馈顾客想先试', acceptance: '客户收到明确答复' },
     ],
     revisitValue: '',
   },
