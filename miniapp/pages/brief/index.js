@@ -22,7 +22,9 @@ Page({
     wx.navigateTo({ url: `/pages/store/detail/index?id=${this.data.storeId}` });
   },
   practice(e) {
-    wx.navigateTo({ url: `/pages/practice/chat/index?scenario=${scenarioByConcern(e.currentTarget.dataset.name)}` });
+    // 陪练在首页对话里进行：记下场景，切回首页后自动开始
+    getApp().globalData.pendingPractice = scenarioByConcern(e.currentTarget.dataset.name);
+    wx.switchTab({ url: '/pages/home/index' });
   },
   copyQuestions() {
     wx.setClipboardData({ data: this.data.brief.questions.map((q, i) => `${i + 1}. ${q}`).join('\n') });

@@ -13,7 +13,7 @@
 
 | 底部标签 / 页面 | 路径 | 内容 |
 |---|---|---|
-| 助手（首页） | `pages/home` | AI 问答界面。助手先开口，推送「今天建议你做的事」卡片（到期跟进、待确认录音、拜访复盘、进店前简报、异议提醒、久未拜访、录音过短）；下面是固定选项；底部保留输入框自由提问。顶部有「拜访四步」进度和「AI 陪练」入口；☰ 抽屉里有 AI 陪练、我的门店、对话记录 |
+| 助手（首页） | `pages/home` | 参考阿福：欢迎卡里有一行今日提醒和两个选项。点「今日待办」→ 对话里出现一张大卡片（跟进事项、待处理录音、拜访复盘、进店前、久未拜访分区列出，可直接完成/复制话术/跳转）；点「AI 销售陪练」→ 进入对话内陪练（选场景 → 用底部输入框回答 4 轮 → 点评卡，可退出）。输入框保留自由提问；☰ 抽屉里有陪练入口、我的门店、对话记录 |
 | 门店 | `pages/store/list` | 门店管理，搜索；没有门店时显示空状态 +「添加门店」 |
 | 拜访 | `pages/visit/list` | 拜访记录，按 全部/待确认/处理中/已完成/无效 筛选 |
 | 我的 | `pages/me` | 本月统计、隐私告知、清空对话 |
@@ -24,7 +24,6 @@
 | 进店前简报 | `pages/brief` | 门店画像、上次没做完的事、本次目标、该问的问题（按档案「未确认」维度生成）、可能遇到的异议 |
 | 我的待办 | `pages/todo` | 来自分析结果的建议行动，按到期排序；标记完成、复制微信跟进话术 |
 | 异议应对 | `pages/objection` | 常见异议的应对要点和参考话术 |
-| AI 陪练 | `pages/practice/list`、`pages/practice/chat` | 选场景，AI 扮演老板对话 4 轮，结束后打分并给参考说法 |
 
 演示小技巧：在「拜访」里打开「张记副食」那条待确认记录，点「确认识别」，约 20 秒内能看到识别 → 整理 → 7 个模块分析 → 完成的全过程。
 
@@ -46,7 +45,7 @@ assets/      图标与空状态插画（SVG）
 | 接口 | 用途 |
 |---|---|
 | `POST /chat` `{question, storeId, history}` → `{text, suggestions}` | 首页 AI 问答（后端接大模型，结合门店数据作答） |
-| `GET /assistant/feed?storeId=` → `{cards, steps}` | 首页主动卡片与拜访四步进度 |
+| `GET /assistant/today?storeId=` → `{hint, stat, steps, sections, suggestions}` | 首页「今日待办」大卡片 |
 | `GET /assistant/brief/:storeId` | 进店前简报 |
 | `GET /todos`、`POST /todos/:id/done`、`POST /todos/:id/undo` | 待办（后端需把“周五前”等时限解析成具体日期） |
 | `GET /practice/scenarios`、`POST /practice/start`、`POST /practice/turn`、`POST /practice/finish` | AI 陪练（后端接大模型扮演客户并点评） |

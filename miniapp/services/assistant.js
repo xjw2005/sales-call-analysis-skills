@@ -19,108 +19,93 @@ function markReviewSeen(visitId) {
   if (seen.indexOf(visitId) < 0) storage.set(REVIEW_KEY, [...seen, visitId]);
 }
 
-// 首页主动卡片 + 拜访四步进度
-async function getTodayFeed(currentStoreId) {
-  if (!config.useMock) return request({ url: '/assistant/feed', data: { storeId: currentStoreId } });
+// 「今日待办」大卡片：把跟进、待处理录音、复盘、进店前、久未拜访合并成一张卡的分区列表
+async function getTodayPanel(currentStoreId) {
+  if (!config.useMock) return request({ url: '/assistant/today', data: { storeId: currentStoreId } });
   const [stores, visits, todos] = await Promise.all([listStores(), listVisits(), listTodos()]);
-  const cards = [];
   const store = stores.find((s) => s.id === currentStoreId) || stores[0];
+  const sections = [];
 
-  // 1. 到期跟进：只展示最紧急的一件，其余提示数量（避免首条消息过长）
-  const due = todos.filter((t) => !t.done && t.due.days <= 0);
-  if (due.length) {
-    const t = due[0];
-    cards.push({
-      type: 'todo', key: `todo-${t.id}`, badge: t.due.text, tone: t.due.tone,
-      title: `${t.storeName}：${t.topic}`,
-      desc: t.action + (due.length > 1 ? `（另有 ${due.length - 1} 件到期）` : ''),
-      buttons: [
-        due.length > 1 ? { text: '全部待办', action: 'openTodos' } : { text: '标记完成', action: 'todoDone', id: t.id },
-        { text: '复制微信话术', action: 'copyMsg', id: t.id, primary: true },
-      ],
-    });
-  }
+  // 跟进事项：逾期 + 今天到期；都没有时展示最近一件
+  const open = todos.filter((t) => !t.done);
+  const due = open.filter((t) => t.due.days <= 0);
+  const followRows = (due.length ? due : open.slice(0, 1)).map((t) => ({
+    key: `todo-${t.id}`, badge: t.due.text, tone: t.due.tone,
+    text: `${t.storeName} · ${t.topic}`, sub: t.action,
+    btn: '完成', action: 'todoDone', id: t.id,
+    subBtn: '复制微信话术', subAction: 'copyMsg',
+  }));
+  if (followRows.length) sections.push({ title: '跟进事项', rows: followRows });
 
-  // 2. 待处理录音
-  const pending = visits.filter((v) => v.status === 'cost_pending');
-  const short = visits.filter((v) => v.status === 'invalid_short' && Date.now() - v.createdAt < 7 * DAY);
-  if (pending.length) {
-    cards.push({
-      type: 'pending', key: 'pending', badge: '待确认', tone: 'warn',
-      title: `${pending.length} 条录音待确认识别费用`,
-      desc: `${pending[0].storeName} · 录音 ${fmt.duration(pending[0].durationSec)}，确认后自动开始分析`,
-      buttons: [{ text: '去确认', action: 'openVisit', id: pending[0].id, primary: true }],
-    });
-  }
-  // 3. 拜访复盘（3 天内新完成、未看过）
+  // 待处理录音
+  const recRows = [];
+  visits.filter((v) => v.status === 'cost_pending').forEach((v) => recRows.push({
+    key: `cost-${v.id}`, badge: '待确认', tone: 'warn',
+    text: `${v.storeName} · 录音 ${fmt.duration(v.durationSec)}`, sub: `预估识别费 ¥${v.estCost}，确认后自动分析`,
+    btn: '去确认', action: 'openVisit', id: v.id,
+  }));
+  visits.filter((v) => v.status === 'invalid_short' && Date.now() - v.createdAt < 7 * DAY).forEach((v) => recRows.push({
+    key: `short-${v.id}`, badge: '过短', tone: 'muted',
+    text: `${v.storeName} · 录音不足 2 分钟`, sub: '下次多问开放式问题，让老板多说',
+    btn: '看怎么问', action: 'openBrief', id: v.storeId,
+  }));
+  if (recRows.length) sections.push({ title: '待处理录音', rows: recRows });
+
+  // 拜访复盘：3 天内新完成、未看过
   const seen = storage.get(REVIEW_KEY, []);
-  const fresh = visits.find((v) => v.status === 'done' && Date.now() - v.createdAt < 3 * DAY && seen.indexOf(v.id) < 0);
-  if (fresh) {
-    const weak = weakestDim(fresh.analysis.effectiveness);
-    const tip = weak && DIM_TIPS[weak.name];
-    const eff = fresh.analysis.effectiveness;
-    cards.push({
-      type: 'review', key: `review-${fresh.id}`, badge: eff ? `${eff.total} 分 · ${fmt.grade(eff.total)}` : '复盘', tone: 'primary',
-      title: `${fresh.storeName} 的拜访分析好了`,
-      desc: tip
-        ? `最该改进：${weak.name}（${weak.score}/${weak.max}）。${tip.tip}，比如：“${tip.say}”`
-        : `下一步：${fresh.analysis.nextAction.actions.map((a) => a.topic).join('、') || '无需新增行动'}`,
-      buttons: [
-        { text: '知道了', action: 'dismissReview', id: fresh.id },
-        { text: '看详情', action: 'openVisit', id: fresh.id, primary: true },
-      ],
+  const reviewRows = visits
+    .filter((v) => v.status === 'done' && Date.now() - v.createdAt < 3 * DAY && seen.indexOf(v.id) < 0)
+    .map((v) => {
+      const eff = v.analysis.effectiveness;
+      const weak = weakestDim(eff);
+      const tip = weak && DIM_TIPS[weak.name];
+      return {
+        key: `review-${v.id}`, badge: eff ? `${eff.total}分 ${fmt.grade(eff.total)}` : '已分析', tone: 'primary',
+        text: `${v.storeName} · ${v.stage}`,
+        sub: tip ? `最该改：${weak.name}。${tip.tip}` : `下一步：${v.analysis.nextAction.actions.map((a) => a.topic).join('、') || '无需新增行动'}`,
+        btn: '看详情', action: 'openVisit', id: v.id,
+      };
     });
-  }
+  if (reviewRows.length) sections.push({ title: '拜访复盘', rows: reviewRows });
 
-  // 4. 进店前简报（当前门店）
+  // 进店前：当前门店
   if (store) {
-    const unconfirmed = store.profile ? store.profile.sections.filter((s) => s.state === '未确认').length : 0;
-    cards.push({
-      type: 'brief', key: `brief-${store.id}`, badge: '进店前', tone: 'info',
-      title: `去 ${store.name} 前，先看 30 秒简报`,
-      desc: store.profile
-        ? `${store.oneLine}${unconfirmed ? `｜还有 ${unconfirmed} 项情况没摸清，已帮你准备好要问的问题。` : ''}`
-        : '第一次拜访：已准备好开场白和要问的问题。',
-      buttons: [{ text: '开始录音', action: 'record', id: store.id }, { text: '看简报', action: 'openBrief', id: store.id, primary: true }],
+    const unconfirmed = store.profile ? store.profile.sections.filter((x) => x.state === '未确认').length : 0;
+    sections.push({
+      title: '进店前',
+      rows: [{
+        key: `brief-${store.id}`, badge: '简报', tone: 'info',
+        text: store.name,
+        sub: store.profile ? `${store.oneLine}${unconfirmed ? `（${unconfirmed} 项情况待摸清）` : ''}` : '第一次拜访，已备好开场白和要问的问题',
+        btn: '看简报', action: 'openBrief', id: store.id,
+      }],
     });
   }
 
-  // 5. 异议提醒（当前门店命中的重点关心点）
-  const latest = store && visits.find((v) => v.storeId === store.id && v.status === 'done');
-  if (latest) {
-    const hit = latest.analysis.concerns.find((c) => c.state === '是' && OBJECTION_FOCUS.indexOf(c.name) >= 0);
-    if (hit && OBJECTIONS[hit.name]) {
-      cards.push({
-        type: 'objection', key: `obj-${store.id}`, badge: hit.name, tone: 'warn',
-        title: `${store.name} 在意「${hit.name}」，这样回应`,
-        desc: OBJECTIONS[hit.name].script,
-        buttons: [{ text: '看应对要点', action: 'openObjection', id: hit.name, primary: true }],
-      });
-    }
-  }
+  // 久未拜访
+  const staleRows = stores
+    .filter((s) => s.lastVisitAt && Date.now() - s.lastVisitAt > STALE_DAYS * DAY)
+    .map((s) => ({
+      key: `stale-${s.id}`, badge: `${Math.floor((Date.now() - s.lastVisitAt) / DAY)}天未访`, tone: 'muted',
+      text: s.name, sub: s.actions.length ? `上次卡在：${s.actions[0].topic}` : '去看看最近情况',
+      btn: '看简报', action: 'openBrief', id: s.id,
+    }));
+  if (staleRows.length) sections.push({ title: '久未拜访', rows: staleRows });
 
-  // 6. 久未拜访
-  stores.filter((s) => s.lastVisitAt && Date.now() - s.lastVisitAt > STALE_DAYS * DAY).slice(0, 1).forEach((s) => {
-    const days = Math.floor((Date.now() - s.lastVisitAt) / DAY);
-    cards.push({
-      type: 'stale', key: `stale-${s.id}`, badge: `${days} 天未访`, tone: 'muted',
-      title: `${s.name} 已经 ${days} 天没去了`,
-      desc: s.actions.length ? `上次卡在：${s.actions[0].topic}` : '去看看最近情况，别让门店凉了。',
-      buttons: [{ text: '看简报', action: 'openBrief', id: s.id, primary: true }],
-    });
-  });
-
-  // 7. 录音过短提醒（优先级最低）
-  if (short.length) {
-    cards.push({
-      type: 'short', key: 'short', badge: '提醒', tone: 'muted',
-      title: `${short[0].storeName} 的录音太短，没法分析`,
-      desc: '有效对话不足 2 分钟。下次进店多问几个开放式问题，让老板多说一会儿。',
-      buttons: [{ text: '看看怎么问', action: 'openBrief', id: short[0].storeId, primary: true }],
-    });
-  }
-
-  return { cards: cards.slice(0, 5), steps: computeSteps(store, visits, todos) };
+  const overdue = due.filter((t) => t.due.days < 0).length;
+  const stuck = due[0] || staleRows[0];
+  return {
+    count: due.length,
+    hint: due.length ? `今天有 ${due.length} 件事要跟进${overdue ? `，${overdue} 件已逾期` : ''}` : '今天暂无到期的跟进事项',
+    stat: `${due.length} 件跟进${overdue ? ` · ${overdue} 件逾期` : ''}`,
+    steps: computeSteps(store, visits, todos),
+    sections,
+    suggestions: [
+      '客户说网上更便宜怎么回？',
+      stuck ? `${stuck.storeName || stuck.text}上次卡在哪？` : '下一步该做什么？',
+      '这家店最关心什么？',
+    ],
+  };
 }
 
 // 拜访四步：0 进店前 → 1 进店中 → 2 离店后 → 3 跟进；全部完成为 4
@@ -176,4 +161,4 @@ async function getBrief(storeId) {
   return brief;
 }
 
-module.exports = { getTodayFeed, getBrief, markReviewSeen };
+module.exports = { getTodayPanel, getBrief, markReviewSeen };

@@ -1,13 +1,15 @@
 const config = require('../config/index');
 const { request, delay } = require('./request');
-const { getStore } = require('./store');
+const { getStore, listStores } = require('./store');
 const { OBJECTIONS } = require('../utils/playbook');
 
 // AI 问答。真实模式：POST /chat，由后端调用大模型并结合门店数据作答（后期可改为流式输出）。
 // 演示模式：按关键词从门店演示数据中拼出回答，只用于看界面效果。
 async function ask({ question, storeId, history = [] }) {
   if (!config.useMock) return request({ url: '/chat', method: 'POST', data: { question, storeId, history } });
-  const store = storeId ? await getStore(storeId).catch(() => null) : null;
+  const named = (await listStores()).find((s) => question.indexOf(s.name) >= 0);
+  const id = named ? named.id : storeId;
+  const store = id ? await getStore(id).catch(() => null) : null;
   return delay(mockAnswer(question, store), 700);
 }
 
@@ -34,9 +36,9 @@ function mockAnswer(q, store) {
     const needs = a.explicitNeeds.map((n) => `· ${n.point}：${n.explanation}`);
     return { text: `${name} 最近一次拜访中，客户关心：${hits.join('、') || '暂无'}。\n\n客户直接提出的需求：\n${needs.join('\n')}`, suggestions: ['下一步该做什么？', '上次拜访评分多少？'] };
   }
-  if (/下一步|行动|待办|跟进/.test(q)) {
+  if (/下一步|行动|待办|跟进|卡在|上次/.test(q)) {
     const acts = a.nextAction.actions.map((x, i) => `${i + 1}. 【${x.timeframe}】${x.topic}：${x.action}（验收：${x.acceptance}）`);
-    return { text: `行动判断：${a.nextAction.judgement}。${a.nextAction.reason}\n\n建议行动：\n${acts.join('\n')}`, suggestions: ['这家店最关心什么？'] };
+    return { text: `${name} 上次拜访（${latest.stage}）后的行动判断：${a.nextAction.judgement}。${a.nextAction.reason}\n\n建议行动：\n${acts.join('\n')}`, suggestions: ['这家店最关心什么？'] };
   }
   if (/评分|打分|进展|话术/.test(q)) {
     const first = (store.visits || []).find((v) => v.status === 'done' && v.analysis.effectiveness);

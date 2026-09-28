@@ -2,25 +2,14 @@ const setTab = require('../../utils/tab');
 const fmt = require('../../utils/format');
 const storage = require('../../utils/storage');
 const { listStores } = require('../../services/store');
-const { listVisits } = require('../../services/visit');
 const { listTodos, setTodoDone } = require('../../services/todo');
-const { getTodayFeed, markReviewSeen } = require('../../services/assistant');
+const { getTodayPanel, markReviewSeen } = require('../../services/assistant');
 const { ask } = require('../../services/chat');
+const practice = require('../../services/practice');
 const { wechatMessage } = require('../../utils/playbook');
 
 const app = getApp();
 const HISTORY_KEY = 'chatHistory';
-
-// 固定选项：新手不用组织问题，点了就走
-const OPTIONS = [
-  { key: 'brief', text: '拜访前准备' },
-  { key: 'review', text: '拜访复盘' },
-  { key: 'objection', text: '异议应对' },
-  { key: 'todo', text: '我的待办' },
-  { key: 'profile', text: '介绍一下这家门店' },
-];
-
-// 输入框提示语每天换一句，教新手可以怎么问
 const PLACEHOLDERS = [
   '试试问：这家店最关心什么？',
   '试试问：客户说网上更便宜怎么回？',
@@ -29,32 +18,28 @@ const PLACEHOLDERS = [
   '试试问：介绍一下这家门店',
 ];
 
-function greeting() {
-  const h = new Date().getHours();
-  if (h < 11) return '早上好';
-  if (h < 14) return '中午好';
-  if (h < 18) return '下午好';
-  return '晚上好';
-}
+let seq = 0;
+const mid = () => `m${Date.now()}${(seq += 1)}`;
 
 Page({
   data: {
     statusBarHeight: 20,
     navHeight: 44,
-    userName: '',
     month: 0,
     day: 0,
     stores: [],
     currentStore: null,
-    steps: null,
-    feed: null, // 助手主动发的第一条消息 { text, cards }
-    options: OPTIONS,
-    placeholder: PLACEHOLDERS[0],
+    todayHint: '',
+    todayCount: 0,
     chatId: '',
-    messages: [], // 之后的问答 { id, role: 'user'|'ai', text, suggestions }
+    // 消息类型：user | ai | todo | practice-intro | customer | result | divider
+    messages: [],
     input: '',
     thinking: false,
     scrollTo: '',
+    placeholder: PLACEHOLDERS[0],
+    defaultPlaceholder: PLACEHOLDERS[0],
+    practice: null, // 陪练进行中：{ sessionId, scenarioId, title, round, total }
     drawerOpen: false,
     histories: [],
   },
@@ -63,46 +48,62 @@ Page({
     const win = wx.getWindowInfo();
     const menu = wx.getMenuButtonBoundingClientRect();
     const now = new Date();
+    const ph = PLACEHOLDERS[now.getDate() % PLACEHOLDERS.length];
     this.setData({
       statusBarHeight: win.statusBarHeight,
       navHeight: (menu.top - win.statusBarHeight) * 2 + menu.height,
-      userName: app.globalData.userName,
       month: now.getMonth() + 1,
       day: now.getDate(),
-      placeholder: PLACEHOLDERS[now.getDate() % PLACEHOLDERS.length],
+      placeholder: ph,
+      defaultPlaceholder: ph,
       chatId: `c${Date.now()}`,
     });
   },
 
   onShow() {
     setTab(this, 0);
-    this.load();
+    this.loadHeader();
+    // 从简报 / 异议页点「陪练」跳回首页时，直接开始对应场景
+    const pending = app.globalData.pendingPractice;
+    if (pending) {
+      app.globalData.pendingPractice = null;
+      this.push({ type: 'user', text: 'AI 销售陪练' });
+      this.startScenario(pending);
+    }
   },
 
   onHide() {
     if (this.data.drawerOpen) this.toggleDrawer();
   },
 
-  async load() {
-    const [stores, visits, todos] = await Promise.all([listStores(), listVisits(), listTodos()]);
+  async loadHeader() {
+    const stores = await listStores();
     const currentStore = stores.find((s) => s.id === app.globalData.currentStoreId) || stores[0] || null;
-    const { cards, steps } = await getTodayFeed(currentStore && currentStore.id);
-    this.todos = todos;
-    this.visits = visits;
-    this.setData({
-      stores,
-      currentStore,
-      steps,
-      feed: {
-        text: cards.length
-          ? `${this.data.userName}，${greeting()}！今天有 ${cards.length} 件事建议你做：`
-          : `${this.data.userName}，${greeting()}！今天没有要提醒你的事，想了解哪家门店直接问我。`,
-        cards,
-      },
-    });
+    const panel = await getTodayPanel(currentStore && currentStore.id);
+    this.setData({ stores, currentStore, todayHint: panel.hint, todayCount: panel.count });
   },
 
-  // ---- 门店上下文 ----
+  // ---- 消息工具 ----
+  push(...items) {
+    const messages = [...this.data.messages, ...items.map((m) => ({ id: mid(), ...m }))];
+    this.setData({ messages, scrollTo: '' });
+    this.setData({ scrollTo: 'bottom' });
+    this.saveChat(messages);
+  },
+  // 替换某条消息（用于刷新今日待办卡片）
+  replace(id, patch) {
+    this.setData({ messages: this.data.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
+  },
+  saveChat(messages) {
+    const first = messages.find((m) => m.type === 'user');
+    if (!first) return;
+    const { chatId, currentStore } = this.data;
+    const list = storage.get(HISTORY_KEY, []).filter((h) => h.id !== chatId);
+    list.unshift({ id: chatId, title: first.text.slice(0, 16), storeName: currentStore ? currentStore.name : '', updatedAt: Date.now(), messages });
+    storage.set(HISTORY_KEY, list.slice(0, 30));
+  },
+
+  // ---- 门店 ----
   switchStore() {
     const { stores } = this.data;
     if (!stores.length) return this.go('/pages/store/edit/index');
@@ -115,7 +116,7 @@ Page({
   useStore(store) {
     app.setCurrentStore(store.id);
     this.setData({ currentStore: store });
-    this.load();
+    this.loadHeader();
   },
   addStore() {
     this.go('/pages/store/edit/index');
@@ -127,49 +128,83 @@ Page({
     return this.data.currentStore ? this.data.currentStore.id : '';
   },
 
-  // ---- 主动卡片按钮 ----
-  async onCardAction(e) {
-    const { action, id } = e.currentTarget.dataset;
+  // ---- 选项一：今日待办 ----
+  async openToday() {
+    const panel = await getTodayPanel(this.storeId());
+    this.push({ type: 'user', text: '今日待办' }, { type: 'todo', panel });
+  },
+  async refreshToday(msgId) {
+    const panel = await getTodayPanel(this.storeId());
+    this.replace(msgId, { panel });
+    this.loadHeader();
+  },
+  async onRowAction(e) {
+    const { action, id, msg } = e.currentTarget.dataset;
     if (action === 'todoDone') {
       await setTodoDone(id, true);
       wx.showToast({ title: '已完成', icon: 'success' });
-      return this.load();
+      return this.refreshToday(msg);
     }
     if (action === 'copyMsg') {
-      const todo = this.todos.find((t) => t.id === id);
+      const todo = (await listTodos()).find((t) => t.id === id);
       return wx.setClipboardData({
         data: wechatMessage(todo, app.globalData.userName),
         success: () => wx.showToast({ title: '话术已复制，去微信粘贴', icon: 'none' }),
       });
     }
-    if (action === 'dismissReview') {
-      markReviewSeen(id);
-      return this.load();
-    }
     if (action === 'openVisit') {
       markReviewSeen(id);
       return this.go(`/pages/visit/detail/index?id=${id}`);
     }
-    if (action === 'openTodos') return this.go('/pages/todo/index');
     if (action === 'openBrief') return this.go(`/pages/brief/index?storeId=${id}`);
-    if (action === 'record') return this.go(`/pages/record/index?storeId=${id}`);
-    if (action === 'openObjection') return this.go(`/pages/objection/index?name=${encodeURIComponent(id)}`);
+    if (action === 'allTodos') return this.go('/pages/todo/index');
+    if (action === 'record') return this.startRecord();
     return undefined;
   },
 
-  // ---- 固定选项 ----
-  onOption(e) {
-    const { key } = e.currentTarget.dataset;
-    const sid = this.storeId();
-    if (key === 'brief') return sid ? this.go(`/pages/brief/index?storeId=${sid}`) : this.addStore();
-    if (key === 'review') {
-      const v = this.visits.find((x) => x.status === 'done');
-      return v ? this.go(`/pages/visit/detail/index?id=${v.id}`) : wx.showToast({ title: '还没有分析完成的拜访', icon: 'none' });
+  // ---- 选项二：AI 销售陪练（对话内模式，参考 AI 诊室） ----
+  async openPractice() {
+    if (this.data.drawerOpen) this.toggleDrawer();
+    if (this.data.practice) this.exitPractice();
+    const scenarios = await practice.listScenarios();
+    this.push({ type: 'user', text: 'AI 销售陪练' }, { type: 'practice-intro', scenarios });
+  },
+  pickScenario(e) {
+    const { id, title } = e.currentTarget.dataset;
+    this.push({ type: 'user', text: `练「${title}」` });
+    this.startScenario(id);
+  },
+  async startScenario(scenarioId) {
+    if (this.data.practice) this.exitPractice();
+    const res = await practice.start(scenarioId);
+    this.setData({
+      practice: { sessionId: res.sessionId, scenarioId, title: res.title, round: 1, total: res.totalRounds },
+      placeholder: '你会怎么回答老板？',
+    });
+    this.push({ type: 'customer', text: res.reply });
+  },
+  async practiceTurn(text) {
+    const p = this.data.practice;
+    this.push({ type: 'user', text });
+    this.setData({ thinking: true });
+    const res = await practice.turn(p.sessionId, text);
+    if (!res.finished) {
+      this.setData({ thinking: false, 'practice.round': p.round + 1 });
+      this.push({ type: 'customer', text: res.reply });
+      return;
     }
-    if (key === 'objection') return this.go('/pages/objection/index');
-    if (key === 'todo') return this.go('/pages/todo/index');
-    if (key === 'profile') return this.send('介绍一下这家门店');
-    return undefined;
+    const result = await practice.finish(p.sessionId);
+    this.setData({ thinking: false });
+    this.push({ type: 'result', result: { ...result, scenarioId: p.scenarioId, title: p.title } });
+    this.exitPractice();
+  },
+  exitPractice() {
+    if (!this.data.practice) return;
+    this.setData({ practice: null, placeholder: this.data.defaultPlaceholder });
+    this.push({ type: 'divider', text: '你已退出 AI 陪练' });
+  },
+  againPractice(e) {
+    this.startScenario(e.currentTarget.dataset.id);
   },
 
   // ---- 问答 ----
@@ -185,31 +220,29 @@ Page({
   async send(text) {
     const question = (text || '').trim();
     if (!question || this.data.thinking) return;
-    const messages = [...this.data.messages, { id: `m${Date.now()}`, role: 'user', text: question }];
-    this.setData({ messages, input: '', thinking: true, scrollTo: 'bottom' });
+    this.setData({ input: '' });
+    if (this.data.practice) {
+      this.practiceTurn(question);
+      return;
+    }
+    this.push({ type: 'user', text: question });
+    this.setData({ thinking: true });
     let reply;
     try {
       reply = await ask({
         question,
         storeId: this.storeId(),
-        history: messages.slice(-10).map((m) => ({ role: m.role, text: m.text })),
+        history: this.data.messages.filter((m) => m.type === 'user' || m.type === 'ai').slice(-10).map((m) => ({ role: m.type, text: m.text })),
       });
     } catch (err) {
       reply = { text: `出错了：${err.message}，请稍后再试。`, suggestions: [] };
     }
-    const next = [...messages, { id: `m${Date.now()}a`, role: 'ai', text: reply.text, suggestions: reply.suggestions || [] }];
-    this.setData({ messages: next, thinking: false, scrollTo: 'bottom' });
-    this.saveChat(next);
-  },
-  saveChat(messages) {
-    const { chatId, currentStore } = this.data;
-    const list = storage.get(HISTORY_KEY, []).filter((h) => h.id !== chatId);
-    list.unshift({ id: chatId, title: messages[0].text.slice(0, 16), storeName: currentStore ? currentStore.name : '', updatedAt: Date.now(), messages });
-    storage.set(HISTORY_KEY, list.slice(0, 30));
+    this.setData({ thinking: false });
+    this.push({ type: 'ai', text: reply.text, suggestions: reply.suggestions || [] });
   },
   newChat() {
+    if (this.data.practice) this.setData({ practice: null, placeholder: this.data.defaultPlaceholder });
     this.setData({ chatId: `c${Date.now()}`, messages: [], input: '', scrollTo: '' });
-    this.load();
   },
 
   // ---- 录音 ----
@@ -229,12 +262,6 @@ Page({
     });
   },
 
-  // ---- 陪练 ----
-  openPractice() {
-    if (this.data.drawerOpen) this.toggleDrawer();
-    this.go('/pages/practice/list/index');
-  },
-
   // ---- 抽屉：打开时隐藏自定义标签栏，避免它浮在抽屉之上 ----
   toggleDrawer() {
     const drawerOpen = !this.data.drawerOpen;
@@ -251,7 +278,7 @@ Page({
   openHistory(e) {
     const h = storage.get(HISTORY_KEY, []).find((x) => x.id === e.currentTarget.dataset.id);
     this.toggleDrawer();
-    if (h) this.setData({ chatId: h.id, messages: h.messages, scrollTo: 'bottom' });
+    if (h) this.setData({ chatId: h.id, messages: h.messages, practice: null, placeholder: this.data.defaultPlaceholder, scrollTo: 'bottom' });
   },
   noop() {},
 });

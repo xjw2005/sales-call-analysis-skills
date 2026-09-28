@@ -15,6 +15,8 @@ Page({
     wx.setClipboardData({ data: e.currentTarget.dataset.text });
   },
   practice(e) {
-    wx.navigateTo({ url: `/pages/practice/chat/index?scenario=${scenarioByConcern(e.currentTarget.dataset.name)}` });
+    // 陪练在首页对话里进行：记下场景，切回首页后自动开始
+    getApp().globalData.pendingPractice = scenarioByConcern(e.currentTarget.dataset.name);
+    wx.switchTab({ url: '/pages/home/index' });
   },
 });
