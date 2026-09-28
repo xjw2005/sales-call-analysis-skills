@@ -6,23 +6,76 @@ Python + FastAPI + MySQL，给小程序 `DingGO-AI-Saler` 提供真实数据，�
 
 ## 在阿里云服务器（Ubuntu）上部署
 
-1. **装 Docker**（用阿里云镜像源）：
+**服务器要求**：Ubuntu 22.04 或更新（自带 Python 3.10+）；内存至少 2GB（MySQL 8 占用较多，1GB 容易被系统杀掉）；硬盘按录音量预留（约每小时录音 20MB）。
+
+有两种部署方式：**A. Docker（推荐，一条命令启动）**；如果服务器拉不下 Docker 镜像（国内访问 Docker Hub 经常失败），用 **B. 不用 Docker**。两种方式的 `.env` 配置相同。
+
+### 第 0 步：拿代码（两种方式都要）
+
+仓库是私有的，`git clone` 会要求登录：用户名 `xjw2005`，密码处填 GitHub **Personal Access Token**（github.com → Settings → Developer settings → Personal access tokens → classic，勾选 `repo`），不是登录密码。
+```bash
+sudo apt update && sudo apt install -y git
+git clone -b claude/awesome-pasteur-2fhgln https://github.com/xjw2005/sales-call-analysis-skills.git
+cd sales-call-analysis-skills/DingGO-backend
+```
+服务器连不上 GitHub 时：在自己电脑上把 `DingGO-backend` 文件夹打成 zip，用 `scp` 或阿里云控制台「远程连接 → 文件上传」传到服务器再解压。
+
+### 第 1 步：填配置（两种方式都要）
+
+```bash
+cp .env.example .env
+nano .env        # 改完按 Ctrl+O 回车保存，Ctrl+X 退出
+```
+- 把所有「请改成…」换掉。**密码只用英文字母和数字**（不要用 `@ : / # ? %` 等符号，会让数据库地址解析出错）。
+- `MYSQL_PASSWORD` 必须和 `DATABASE_URL` 里 `dinggo:` 后面、`@` 前面的密码**完全一样**。
+- `JWT_SECRET`、`ADMIN_TOKEN` 可以用 `openssl rand -hex 32` 生成。
+- `PUBLIC_BASE_URL` 填 `http://服务器公网IP:8000`。
+
+### A. Docker 部署
+
+1. **装 Docker**（任选其一；阿里云 Ubuntu 默认用阿里云 apt 源，第二种更稳）：
    ```bash
    curl -fsSL https://get.docker.com | sudo bash -s docker --mirror Aliyun
+   # 或：sudo apt install -y docker.io docker-compose-v2
    sudo systemctl enable --now docker
    ```
-   国内拉 Docker 镜像可能很慢：在阿里云控制台「容器镜像服务 → 镜像工具 → 镜像加速器」拿到你的专属加速地址，按页面说明写进 `/etc/docker/daemon.json` 后 `sudo systemctl restart docker`。
-2. **拿代码**：
-   ```bash
-   git clone -b claude/awesome-pasteur-2fhgln https://github.com/xjw2005/sales-call-analysis-skills.git
-   cd sales-call-analysis-skills/DingGO-backend
-   ```
-3. **填配置**：`cp .env.example .env`，然后 `nano .env` 把里面所有「请改成…」换掉；`PUBLIC_BASE_URL` 填 `http://服务器公网IP:8000`。
-4. **启动**：`sudo docker compose up -d --build`（第一次会下载镜像、自动建表，几分钟）。
-5. **放行端口**：阿里云控制台 → 该服务器的「安全组」→ 入方向添加 TCP 8000。
-6. **检查**：浏览器打开 `http://服务器公网IP:8000/health` 显示 `{"ok":true}` 即成功；`http://服务器公网IP:8000/docs` 是全部接口的说明页。
+2. **配置镜像加速**：阿里云控制台「容器镜像服务 ACR → 镜像工具 → 镜像加速器」复制专属地址，按页面说明写入 `/etc/docker/daemon.json`，然后 `sudo systemctl restart docker`。
+3. **启动**：`sudo docker compose up -d --build`（第一次要下载 `mysql:8.0`、`python:3.11-slim` 两个镜像并自动建表，几分钟）。
+   若报 `pull access denied`、`timeout`、`TLS handshake` 之类拉镜像失败的错误，说明服务器拉不到 Docker Hub，改用下面的 **B**。
+4. 更新代码：`git pull && sudo docker compose up -d --build`；看日志：`sudo docker compose logs -f api`。
 
-更新代码：`git pull && sudo docker compose up -d --build`。看日志：`sudo docker compose logs -f api`。
+### B. 不用 Docker 部署
+
+```bash
+# 1. 装 MySQL 和 Python
+sudo apt install -y mysql-server python3-venv python3-pip
+# 2. 建数据库和账号（把 你的密码 换成 .env 里 MYSQL_PASSWORD 的值）
+sudo mysql -e "CREATE DATABASE dinggo CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'dinggo'@'localhost' IDENTIFIED BY '你的密码';
+GRANT ALL PRIVILEGES ON dinggo.* TO 'dinggo'@'localhost'; FLUSH PRIVILEGES;"
+# 3. .env 里的数据库地址改成本机：把 DATABASE_URL 中的 @db:3306 改成 @localhost:3306
+sed -i 's/@db:3306/@localhost:3306/' .env
+# 4. 装依赖、建表
+python3 -m venv .venv
+.venv/bin/pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
+.venv/bin/alembic upgrade head
+# 5. 设为系统服务（开机自启、崩溃自动重启）
+sed "s#__DIR__#$(pwd)#g; s#__USER__#$(whoami)#g" deploy/dinggo-api.service | sudo tee /etc/systemd/system/dinggo-api.service
+sudo systemctl daemon-reload && sudo systemctl enable --now dinggo-api
+```
+更新代码：`git pull && .venv/bin/pip install -r requirements.txt && .venv/bin/alembic upgrade head && sudo systemctl restart dinggo-api`；看日志：`sudo journalctl -u dinggo-api -f`。
+
+### 第 2 步：放行端口并检查（两种方式都要）
+
+1. 阿里云控制台 → 该服务器的「安全组」→ 入方向添加 **TCP 8000**，来源 `0.0.0.0/0`。
+2. 如果系统防火墙开着（`sudo ufw status` 显示 active），再执行 `sudo ufw allow 8000/tcp`。
+3. 浏览器打开 `http://服务器公网IP:8000/health`，显示 `{"ok":true}` 即成功；`/docs` 是全部接口说明页。
+
+### 备份
+
+- 数据库：`sudo docker compose exec db sh -c 'mysqldump -udinggo -p"$MYSQL_PASSWORD" dinggo' > backup.sql`（方式 B：`mysqldump -udinggo -p dinggo > backup.sql`）。
+- 录音文件：`data/uploads/` 目录（方式 A、B 相同）。
+- 建议在阿里云控制台给服务器磁盘开「自动快照」。
 
 ## 小程序连接后端
 

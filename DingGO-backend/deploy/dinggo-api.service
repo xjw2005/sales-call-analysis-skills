@@ -1,0 +1,15 @@
+# 不用 Docker 部署时的系统服务模板；__DIR__、__USER__ 由 README 里的 sed 命令替换
+[Unit]
+Description=DingGo 销售助手后端
+After=network.target mysql.service
+
+[Service]
+User=__USER__
+WorkingDirectory=__DIR__
+Environment=TZ=Asia/Shanghai
+ExecStart=__DIR__/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
