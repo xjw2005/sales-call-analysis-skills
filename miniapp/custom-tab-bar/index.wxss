@@ -1,4 +1,0 @@
-.bar { position: fixed; left: 32rpx; right: 32rpx; bottom: calc(16rpx + env(safe-area-inset-bottom)); height: 128rpx; background: rgba(255,255,255,0.96); border-radius: 64rpx; display: flex; box-shadow: 0 8rpx 40rpx rgba(28,27,75,0.08); }
-.item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #a7aac2; font-size: 22rpx; }
-.item.active { color: #1c1b4b; font-weight: 600; }
-.icon { width: 48rpx; height: 48rpx; margin-bottom: 6rpx; }

@@ -12,7 +12,7 @@
       <view class="hero card">
         <view class="date"><view class="date-m">{{month}}月</view><view class="date-d">{{day}}</view></view>
         <view class="hi">Hi</view>
-        <view class="greet">我是你的销售助手</view>
+        <view class="greet">我是<text class="brand">DingGo</text>，你的 AI 销售助手</view>
         <view class="row store-row">
           <text class="faint ctx">当前门店</text>
           <view class="pill" bindtap="switchStore">

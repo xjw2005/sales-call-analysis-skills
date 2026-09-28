@@ -1,6 +1,0 @@
-<view class="ring" style="width:{{size}}rpx;height:{{size}}rpx;background:conic-gradient({{color}} {{pct}}%, #e8e9f2 0);">
-  <view class="inner">
-    <view class="num" style="color:{{color}}">{{empty ? '--' : value}}<text class="unit" wx:if="{{!empty}}">{{unit}}</text></view>
-    <view class="label" style="color:{{color}}">{{label}}</view>
-  </view>
-</view>

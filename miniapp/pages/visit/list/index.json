@@ -1,8 +1,0 @@
-{
-  "navigationBarTitleText": "拜访记录",
-  "enablePullDownRefresh": true,
-  "usingComponents": {
-    "visit-card": "/components/visit-card/index",
-    "empty-state": "/components/empty-state/index"
-  }
-}

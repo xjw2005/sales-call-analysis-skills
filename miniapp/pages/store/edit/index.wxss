@@ -1,8 +1,0 @@
-.form { margin-top: 24rpx; padding: 8rpx 32rpx; }
-.field { padding: 28rpx 0; border-bottom: 2rpx solid #f0f1f6; }
-picker:last-child .field, .field:last-child { border-bottom: none; }
-.label { font-size: 26rpx; color: #6b6f8e; margin-bottom: 12rpx; }
-.req { color: #f0544f; }
-.input { font-size: 30rpx; min-height: 44rpx; }
-.ph { color: #a7aac2; }
-.tip { padding: 0 8rpx; }

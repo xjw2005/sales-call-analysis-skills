@@ -1,6 +1,0 @@
-<view class="empty {{compact ? 'compact' : ''}}">
-  <image class="img" src="{{image}}" mode="aspectFit" />
-  <view class="title">{{title}}</view>
-  <view wx:if="{{desc}}" class="desc">{{desc}}</view>
-  <slot />
-</view>

@@ -1,9 +1,0 @@
-<view class="timeline">
-  <view wx:for="{{nodes}}" wx:key="key" class="node {{item.state}}">
-    <view class="dot"><text wx:if="{{item.state === 'done'}}">✓</text><text wx:elif="{{item.state === 'error'}}">!</text></view>
-    <view class="body">
-      <view class="label">{{item.label}}</view>
-      <view wx:if="{{item.sub}}" class="sub">{{item.sub}}</view>
-    </view>
-  </view>
-</view>

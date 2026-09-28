@@ -11,8 +11,10 @@
 .date { position: absolute; right: 32rpx; top: 32rpx; width: 88rpx; border-radius: 16rpx; overflow: hidden; text-align: center; box-shadow: 0 4rpx 16rpx rgba(91,85,232,0.12); }
 .date-m { background: #5b55e8; color: #fff; font-size: 20rpx; padding: 4rpx 0; }
 .date-d { background: #fff; font-size: 40rpx; font-weight: 700; padding: 4rpx 0; }
-.hi { font-size: 56rpx; font-style: italic; font-weight: 800; color: #2d2a9e; }
-.greet { font-size: 44rpx; font-weight: 700; color: #2d2a9e; margin: 4rpx 0 8rpx; }
+.hi { font-size: 60rpx; font-style: italic; font-weight: 800; color: #2d2a9e; font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; letter-spacing: 2rpx; }
+.greet { font-size: 40rpx; font-weight: 700; color: #2d2a9e; margin: 4rpx 120rpx 8rpx 0; line-height: 1.45; letter-spacing: 1rpx; }
+/* 品牌名：紫→蓝渐变字 */
+.brand { margin: 0 6rpx; font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; font-weight: 800; background: linear-gradient(90deg, #5b55e8, #3d7cf5); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .store-row { margin: 24rpx 0 8rpx; }
 .ctx { margin-right: 16rpx; }
 .caret { margin-left: 12rpx; font-size: 22rpx; }

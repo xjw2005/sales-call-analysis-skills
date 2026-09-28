@@ -16,7 +16,8 @@ page {
   background: var(--bg);
   color: var(--text);
   font-size: 28rpx;
-  font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  /* 字体：iPhone 用苹方；电脑（开发者工具）用微软雅黑；安卓优先鸿蒙/小米/思源黑体，都没有时用系统默认 */
+  font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', 'HarmonyOS Sans SC', 'MiSans', 'Source Han Sans SC', 'Noto Sans CJK SC', 'Helvetica Neue', sans-serif;
 }
 
 .gradient-bg { background: linear-gradient(180deg, #e3e0ff 0%, #e6f6ff 45%, var(--bg) 100%); }
