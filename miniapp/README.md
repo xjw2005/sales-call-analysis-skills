@@ -6,7 +6,7 @@
 ## 怎么打开
 
 1. 拉取本仓库，微信开发者工具 → 导入项目 → 目录选 `miniapp/`。
-2. AppID 选「测试号」或填你自己的 AppID（`project.config.json` 里默认是 `touristappid`）。
+2. 已配置项目 AppID（`project.config.json`），可直接真机调试。
 3. 不需要「构建 npm」，没有第三方依赖。
 
 ## 页面
