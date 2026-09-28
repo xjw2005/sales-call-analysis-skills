@@ -1,7 +1,7 @@
 const fmt = require('../../utils/format');
 const { STAGES, FIRST_STAGE } = require('../../utils/constants');
 const { listStores } = require('../../services/store');
-const { createVisit } = require('../../services/visit');
+const { createVisit, completeUpload } = require('../../services/visit');
 const { uploadSegments } = require('../../services/upload');
 
 const app = getApp();
@@ -211,6 +211,7 @@ Page({
         segments,
       });
       await uploadSegments(segments, visit.upload, (done, total) => wx.showLoading({ title: `上传 ${done}/${total}`, mask: true }));
+      await completeUpload(visit.id, seconds);
       wx.hideLoading();
       wx.disableAlertBeforeUnload();
       wx.redirectTo({ url: `/pages/visit/detail/index?id=${visit.id}` });

@@ -68,6 +68,12 @@ function createVisit({ storeId, stage, cooperated, note, durationSec, segments }
   return delay(simulate(v), 600);
 }
 
+// 所有分段上传完成：后端计算时长与预估费用，进入「待确认费用」
+function completeUpload(id, durationSec) {
+  if (!config.useMock) return request({ url: `/visits/${id}/segments/complete`, method: 'POST', data: { durationSec } });
+  return delay(null);
+}
+
 function confirmCost(id) {
   if (!config.useMock) return request({ url: `/visits/${id}/confirm-cost`, method: 'POST' });
   const v = seed.visits.find((x) => x.id === id);
@@ -81,4 +87,4 @@ function rejudge(id) {
   return delay(null).then(() => { throw new Error('演示数据：录音不足 120 秒，仍判定为过短'); });
 }
 
-module.exports = { listVisits, getVisit, createVisit, confirmCost, rejudge };
+module.exports = { listVisits, getVisit, createVisit, completeUpload, confirmCost, rejudge };

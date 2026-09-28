@@ -40,6 +40,13 @@ pages/       页面
 assets/      图标与空状态插画（SVG）
 ```
 
+## 连接真实后端（DingGO-backend）
+
+1. 按 `DingGO-backend/README.md` 把后端部署到服务器。
+2. 改 `config/index.js`：`useMock: false`，`baseUrl: 'http://服务器公网IP:8000'`。`mockAI` 保持 `true`（AI 问答、陪练继续用演示数据，直到后端接入 AI）。
+3. 开发者工具「详情 → 本地设置」勾选「不校验合法域名…」；手机上用真机调试。
+4. 首次请求会自动 `wx.login` 登录，凭证存在本机。
+
 ## 后端需要提供的接口（`useMock` 改为 `false` 后调用）
 
 | 接口 | 用途 |
