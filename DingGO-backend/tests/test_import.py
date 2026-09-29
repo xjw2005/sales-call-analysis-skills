@@ -234,6 +234,7 @@ def test_imported_data_visible_through_api(client, xlsx):
     assert by_code["ST-0001"]["oneLine"].startswith("新开母婴店") and by_code["ST-0001"]["visitCount"] == 2
     detail = client.get(f"/stores/{by_code['ST-0001']['id']}", headers=h).json()
     assert detail["contactPhone"] == "13800000000" and detail["correction"] == "门店约 80 平"
+    assert [s["title"] for a in detail["legacyActions"] for s in a["sections"]] == ["下一步行动"] and isinstance(detail["todos"], list)
 
     visits = client.get("/visits", headers=h).json()
     assert {v["code"] for v in visits} == {"RA-0001", "RA-0003", "RA-0005"} and all(v["legacy"] for v in visits)

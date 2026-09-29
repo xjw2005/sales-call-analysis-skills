@@ -6,7 +6,7 @@ const STATE_TONE = { 稳定档案: 'success', 当前状态: 'info', 未确认: '
 const app = getApp();
 
 Page({
-  data: { id: '', coopTone: 'muted', store: null, tab: 0, tabs: ['门店档案', '拜访记录', '行动闭环'], grade: '', sections: [] },
+  data: { hasMetrics: true, id: '', coopTone: 'muted', store: null, tab: 0, tabs: ['门店档案', '拜访记录', '行动闭环'], grade: '', sections: [] },
   onLoad({ id }) {
     this.setData({ id });
   },
@@ -18,7 +18,11 @@ Page({
       const store = await getStore(this.data.id);
       const sections = store.profile ? store.profile.sections.map((s) => ({ ...s, tone: STATE_TONE[s.state] || 'muted' })) : [];
       store.loops = store.loops.map((l) => ({ ...l, time: fmt.date(l.createdAt) }));
-      this.setData({ store, sections, coopTone: COOP_TONE[store.cooperationStatus] || 'muted', grade: fmt.grade(store.metrics.score) });
+      store.todos = store.todos || [];
+      store.legacyActions = (store.legacyActions || []).map((l) => ({ ...l, time: fmt.date(l.createdAt) }));
+      const m = store.metrics || {};
+      const hasMetrics = m.score !== null && m.score !== undefined || m.concernHits !== null && m.concernHits !== undefined || m.loopRate !== null && m.loopRate !== undefined;
+      this.setData({ hasMetrics, store, sections, coopTone: COOP_TONE[store.cooperationStatus] || 'muted', grade: fmt.grade(m.score) });
       wx.setNavigationBarTitle({ title: store.name });
     } catch (err) {
       wx.showToast({ title: err.message, icon: 'none' });

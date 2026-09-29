@@ -7,11 +7,11 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import current_user
-from ..models import CorrectionEvent, Store, StoreCorrection, StoreDirectory, StoreProfileSection, User
+from ..models import CorrectionEvent, Store, StoreCorrection, StoreDirectory, StoreProfileSection, User, Visit, VisitAnalysis
 from ..services.access import is_manager, team_ids, visible_store
 from ..services.constants import COOPERATION_STATUSES, PROFILE_LABELS, PROFILE_STATES
 from ..services.ingest import upsert_profile_section
-from ..services.summary import list_stores, list_visits, summarize_store
+from ..services.summary import _effective, list_stores, list_todos, list_visits, summarize_store
 
 router = APIRouter(prefix="/stores", tags=["门店"])
 
@@ -73,7 +73,22 @@ def _detail(db: Session, user: User, store: Store) -> dict:
     if not (_can_manage(db, user, store) or is_manager(user)):
         out.pop("contactName", None)
         out.pop("contactPhone", None)
-    return {**out, "visits": visits}
+    return {**out, "visits": visits, "legacyActions": _legacy_actions(db, visits), "todos": [t for t in list_todos(db, user, scope="team") if t["storeId"] == out["id"]]}
+
+
+def _legacy_actions(db: Session, visits: list[dict]) -> list[dict]:
+    """飞书导入的拜访里「下一步行动 / 上次行动闭环」原文，按拜访时间倒序"""
+    legacy = {int(v["id"]): v for v in visits if v.get("legacy")}
+    if not legacy:
+        return []
+    rows = db.scalars(select(VisitAnalysis).where(VisitAnalysis.visit_id.in_(list(legacy)), VisitAnalysis.module.in_(["next-action", "loop"])))
+    by_visit: dict[int, list[dict]] = {}
+    for r in rows:
+        text = (_effective(r) or {}).get("text", "")
+        if text.strip():
+            by_visit.setdefault(r.visit_id, []).append({"title": "下一步行动" if r.module == "next-action" else "上次行动闭环", "text": text})
+    return [{"visitId": str(vid), "createdAt": legacy[vid]["createdAt"], "stage": legacy[vid]["stage"], "sections": secs}
+            for vid, secs in sorted(by_visit.items(), key=lambda x: -legacy[x[0]]["createdAt"])]
 
 
 def _slim(store: dict) -> dict:

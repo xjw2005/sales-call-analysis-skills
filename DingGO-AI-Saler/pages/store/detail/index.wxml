@@ -7,11 +7,13 @@
     <view class="faint addr">{{store.province}}{{store.city}} {{store.address}}</view>
 
     <!-- 三圆环仪表（对应 精力/饮食/活动） -->
-    <view class="rings row">
+    <view wx:if="{{hasMetrics}}" class="rings row">
       <score-ring value="{{store.metrics.score}}" label="合作进展{{grade ? ' · ' + grade : ''}}" color="#3d7cf5" size="{{190}}" />
       <score-ring value="{{store.metrics.concernHits}}" max="{{9}}" unit="/9" label="关心点" color="#22b07d" size="{{220}}" />
       <score-ring value="{{store.metrics.loopRate}}" unit="%" label="行动闭环" color="#f5a623" size="{{190}}" />
     </view>
+
+    <view wx:else class="faint nometrics">暂无 AI 分析数据，新录音分析后显示合作进展、关心点和行动闭环。</view>
 
     <view class="segment">
       <view wx:for="{{tabs}}" wx:key="*this" class="segment-item {{tab === index ? 'active' : ''}}" data-i="{{index}}" bindtap="switchTab">{{item}}</view>
@@ -47,6 +49,22 @@
 
     <!-- 行动闭环 -->
     <view wx:if="{{tab === 2}}">
+      <block wx:if="{{store.todos.length}}">
+        <view class="section-title small">待办事项</view>
+        <view wx:for="{{store.todos}}" wx:key="id" class="card">
+          <view class="row between"><text class="act-topic">{{item.topic}}</text><text class="tag {{item.done ? 'success' : item.due.tone}}">{{item.done ? '已完成' : (item.dueDate ? item.due.text : '进行中')}}</text></view>
+          <view wx:if="{{item.action}}" class="muted act">{{item.action}}</view>
+          <view wx:if="{{item.targetQty !== null}}" class="faint">{{item.period}} 目标 {{item.targetQty}}{{item.unit}} · 已达成 {{item.achievedQty || 0}}{{item.unit}}{{item.gapQty !== null ? ' · 差 ' + item.gapQty : ''}}</view>
+          <view wx:if="{{item.progressNote}}" class="faint">{{item.progressNote}}</view>
+        </view>
+      </block>
+      <block wx:if="{{store.legacyActions.length}}">
+        <view class="section-title small">历史拜访中的行动记录</view>
+        <view wx:for="{{store.legacyActions}}" wx:key="visitId" wx:for-item="la" class="card">
+          <view class="faint">{{la.time}} · {{la.stage}}</view>
+          <view wx:for="{{la.sections}}" wx:key="title" class="loop-item"><view class="act-topic">{{item.title}}</view><view class="muted loop-now">{{item.text}}</view></view>
+        </view>
+      </block>
       <view class="section-title small">当前建议行动</view>
       <view wx:for="{{store.actions}}" wx:key="index" class="card">
         <view class="row between"><text class="act-topic">{{item.topic}}</text><text class="tag primary">{{item.timeframe}}</text></view>
