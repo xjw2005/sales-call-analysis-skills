@@ -11,14 +11,19 @@ function timestamp(ms) {
   return duration((ms || 0) / 1000);
 }
 
+// 一律按北京时间（UTC+8）显示，不受手机或开发者工具所在电脑的时区影响
+function beijing(input) {
+  return new Date(new Date(input).getTime() + 8 * 3600 * 1000);
+}
+
 function date(input) {
-  const d = new Date(input);
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const d = beijing(input);
+  return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日 ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
 function dayKey(input) {
-  const d = new Date(input);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const d = beijing(input);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
 function grade(score) {
