@@ -2,14 +2,19 @@ const setTab = require('../../utils/tab');
 const config = require('../../config/index');
 const fmt = require('../../utils/format');
 const { listVisits } = require('../../services/visit');
+const { refreshUser } = require('../../services/request');
 
 const app = getApp();
 
 Page({
   data: { userName: '', useMock: config.useMock, stats: { visits: 0, minutes: 0, cost: '0.00' } },
-  onShow() {
+  async onShow() {
     setTab(this, 3);
     this.setData({ userName: app.globalData.userName });
+    if (!config.useMock) {
+      await refreshUser();
+      this.setData({ userName: app.globalData.userName });
+    }
     this.load();
   },
   async load() {

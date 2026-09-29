@@ -1,4 +1,6 @@
 const setTab = require('../../utils/tab');
+const config = require('../../config/index');
+const { refreshUser } = require('../../services/request');
 const fmt = require('../../utils/format');
 const storage = require('../../utils/storage');
 const { listStores } = require('../../services/store');
@@ -77,6 +79,7 @@ Page({
   },
 
   async loadHeader() {
+    if (!config.useMock) await refreshUser();
     const stores = await listStores();
     const currentStore = stores.find((s) => s.id === app.globalData.currentStoreId) || stores[0] || null;
     const panel = await getTodayPanel(currentStore && currentStore.id);

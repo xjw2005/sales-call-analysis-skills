@@ -1,6 +1,7 @@
 const config = require('../config/index');
 
 const TOKEN_KEY = 'token';
+const USER_KEY = 'user';
 let loginPromise = null;
 
 // 去掉值为空的参数，避免把 undefined 当成字符串传给后端
@@ -41,16 +42,25 @@ function send({ url, method, data, token }) {
   });
 }
 
+// 记住当前登录的人，界面上显示的名字都从这里来（合并账号后会变成旧人员的名字）
+function saveUser(user) {
+  if (!user) return;
+  try { wx.setStorageSync(USER_KEY, user); } catch (e) { /* 存储不可用时忽略 */ }
+  const app = getApp();
+  if (app && user.name) app.globalData.userName = user.name;
+}
+
 // 微信登录：wx.login 拿 code → 后端换登录凭证；多个请求同时触发时只登录一次
 function login() {
   if (!loginPromise) {
     loginPromise = new Promise((resolve, reject) => {
       wx.login({ success: resolve, fail: () => reject(new Error('微信登录失败')) });
     })
-      .then(({ code }) => send({ url: '/auth/wx-login', method: 'POST', data: { code, name: getApp().globalData.userName } }))
+      .then(({ code }) => send({ url: '/auth/wx-login', method: 'POST', data: { code, name: '新用户' } }))
       .then((res) => {
         if (res.statusCode !== 200) throw new Error((res.data && res.data.message) || '登录失败');
         wx.setStorageSync(TOKEN_KEY, res.data.token);
+        saveUser(res.data.user);
         return res.data.token;
       })
       .finally(() => { loginPromise = null; });
@@ -73,6 +83,18 @@ async function request({ url, method = 'GET', data }) {
   throw new Error((res.data && res.data.message) || `请求失败 ${res.statusCode}`);
 }
 
+// 向后端取当前登录的人并更新本地名字；演示模式或网络失败时保持原样
+async function refreshUser() {
+  if (config.useMock) return null;
+  try {
+    const user = await request({ url: '/auth/me' });
+    saveUser(user);
+    return user;
+  } catch (e) {
+    return null;
+  }
+}
+
 const delay = (value, ms = 200) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
-module.exports = { request, delay, ensureToken };
+module.exports = { request, delay, ensureToken, refreshUser };
