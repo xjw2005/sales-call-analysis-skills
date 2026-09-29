@@ -4,6 +4,30 @@ Python + FastAPI + MySQL，给小程序 `DingGO-AI-Saler` 提供真实数据，�
 第一期只做基础功能：登录、门店、拜访（含无录音拜访）、录音上传、费用确认、待办（含月度目标）、今日待办、进店前简报、旧数据导入。
 **AI 功能（语音识别、销售分析、问答、陪练）尚未接入**：确认费用后拜访停在「语音识别中」；分析结果可先用导入工具写入。
 
+## 上线顺序总览
+
+严格按这个顺序，不要跳步（尤其不要在部署验证通过前导入数据）：
+
+| 步骤 | 做什么 | 看哪一节 |
+|---|---|---|
+| 1 | 部署后端（Docker，拉不下镜像就用不用 Docker 的方式） | 「在阿里云服务器上部署」 |
+| 2 | 部署后自测：确认登录、建门店、读写数据库都通；自测数据清掉 | 「部署后自测」 |
+| 3 | **导入试运行**（不写库），把报告发给项目负责人，等确认 | 「导入飞书旧数据」第 2 步 |
+| 4 | 确认后**正式导入**（加 `--commit`） | 「导入飞书旧数据」第 3 步 |
+| 5 | 3 位旧人员各用小程序登录一次，管理员把新账号合并到旧账号 | 「导入飞书旧数据」→「人员」 |
+| 6 | 小程序切换到真实后端（`useMock` 改为 `false`，`baseUrl` 填服务器地址） | 「小程序连接后端」 |
+
+## 给运维 / AI 助手的约定
+
+负责部署的人（包括 AI 助手）请遵守：
+
+1. **不要修改代码**。部署只需要改 `.env`；遇到报错，把报错原文发给项目负责人，不要自己改代码绕过去。
+2. **密码、密钥、Excel 都不能进 Git，也不要贴到聊天里**：`.env`（数据库密码、`JWT_SECRET`、`ADMIN_TOKEN`）自己生成、自己保存；Excel 只放在服务器上。`.env` 已在 `.gitignore` 里，不要 `git add -f`。
+3. **`WX_SECRET`（小程序密钥）项目负责人以后单独提供**：在拿到之前保持 `DEV_LOGIN=true`，不要自己去找或猜。拿到后填进 `.env`，同时把 `DEV_LOGIN` 改成 `false`（否则任何人都能免验证登录）。
+4. **导入必须先试运行**（不加 `--commit`），把完整报告发给项目负责人，**得到确认后**才能加 `--commit`。
+5. **导入之前先清掉自测数据**（见「部署后自测」末尾），否则自测门店会混进正式数据。
+6. 每完成一步，把结果（命令输出，去掉密码后）告诉项目负责人。
+
 ## 在阿里云服务器（Ubuntu）上部署
 
 **服务器要求**：Ubuntu 22.04 或更新（自带 Python 3.10+）；内存至少 2GB（MySQL 8 占用较多，1GB 容易被系统杀掉）；硬盘按录音量预留（约每小时录音 20MB）。
@@ -70,6 +94,54 @@ sudo systemctl daemon-reload && sudo systemctl enable --now dinggo-api
 1. 阿里云控制台 → 该服务器的「安全组」→ 入方向添加 **TCP 8000**，来源 `0.0.0.0/0`。
 2. 如果系统防火墙开着（`sudo ufw status` 显示 active），再执行 `sudo ufw allow 8000/tcp`。
 3. 浏览器打开 `http://服务器公网IP:8000/health`，显示 `{"ok":true}` 即成功；`/docs` 是全部接口说明页。
+
+### 部署后自测
+
+`/health` 只说明程序起来了。下面几条命令再确认：登录、写数据库、读数据库、权限都真的通。
+在**服务器上**执行（`BASE` 换成实际地址；需要 `.env` 里 `DEV_LOGIN=true`，登录用的是开发登录）：
+
+```bash
+BASE=http://127.0.0.1:8000
+
+# 1. 健康检查  → {"ok":true}
+curl -s $BASE/health; echo
+
+# 2. 开发登录，拿登录凭证（应输出一串 100+ 个字符的长度）
+TOKEN=$(curl -s -X POST $BASE/auth/wx-login -H 'Content-Type: application/json' \
+  -d '{"code":"smoke-test","name":"自测"}' | sed -E 's/.*"token":"([^"]+)".*/\1/')
+echo "token 长度: ${#TOKEN}"
+
+# 3. 新建一家自测门店（写数据库）  → 返回 {"id":"1",...,"name":"自测-可删除",...}
+R=$(curl -s -X POST $BASE/stores -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"name":"自测-可删除"}')
+echo "$R" | cut -c1-120
+STORE_ID=$(echo "$R" | sed -E 's/^\{"id":"([0-9]+)".*/\1/')
+
+# 4. 读回门店列表（读数据库）  → 列表里能看到「自测-可删除」，中文不能是问号
+curl -s $BASE/stores -H "Authorization: Bearer $TOKEN" | cut -c1-100
+
+# 5. 登记一条无录音拜访  → 返回里 "status":"no_recording"
+curl -s -X POST $BASE/visits -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"storeId\":\"$STORE_ID\",\"stage\":\"日常维护\",\"recordingMode\":\"none\",\"noRecordingReason\":\"自测\"}" | cut -c1-140
+
+# 6. 今日待办  → {"count":0,"hint":"今天暂无到期的跟进事项",...}
+curl -s "$BASE/assistant/today" -H "Authorization: Bearer $TOKEN" | cut -c1-90
+
+# 7. 不带凭证必须被拒绝  → {"message":"请先登录"}
+curl -s $BASE/stores; echo
+```
+
+7 条输出都和注释里写的一致，才算部署成功。任何一条不一致：看日志（`sudo docker compose logs api` 或 `sudo journalctl -u dinggo-api`），把报错原文发给项目负责人。
+
+**自测完必须清掉自测数据**（导入正式数据之前）：
+```bash
+# Docker 部署：
+sudo docker compose exec -T db sh -c 'mysql -udinggo -p"$MYSQL_PASSWORD" dinggo' <<'SQL'
+DELETE FROM visits WHERE store_id IN (SELECT id FROM stores WHERE name = '自测-可删除');
+DELETE FROM stores WHERE name = '自测-可删除';
+DELETE FROM users WHERE openid = 'dev-smoke-test';
+SQL
+# 不用 Docker：把上面三条 DELETE 语句放进  mysql -udinggo -p dinggo  里执行
+```
 
 ### 备份
 
