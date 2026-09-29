@@ -9,8 +9,13 @@
       <text wx:if="{{!item.done}}" class="tag {{item.due.tone}}">{{item.due.text}}</text>
     </view>
     <view class="topic">{{item.topic}}</view>
-    <view class="action">{{item.action}}</view>
-    <view class="faint">验收：{{item.acceptance}}</view>
+    <view wx:if="{{item.action}}" class="action">{{item.action}}</view>
+    <view wx:if="{{item.hasTarget}}" class="target">
+      <view class="row between"><text>目标 {{item.targetQty}}{{item.unit}} · 已达成 {{item.achievedQty || 0}}{{item.unit}}</text><text class="faint">差 {{item.gapQty}}{{item.unit}}</text></view>
+      <view class="bar"><view class="bar-fill" style="width:{{item.pct}}%"></view></view>
+      <view wx:if="{{item.progressNote}}" class="faint">{{item.progressNote}}</view>
+    </view>
+    <view wx:if="{{item.acceptance}}" class="faint">验收：{{item.acceptance}}</view>
     <view class="btns row">
       <view wx:if="{{!item.done}}" class="fb" data-id="{{item.id}}" bindtap="copy">复制微信话术</view>
       <view class="{{item.done ? 'fb' : 'fb-primary'}}" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">{{item.done ? '撤销完成' : '标记完成'}}</view>

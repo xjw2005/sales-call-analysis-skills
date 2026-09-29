@@ -1,5 +1,5 @@
 const fmt = require('../../utils/format');
-const { STAGES, FIRST_STAGE } = require('../../utils/constants');
+const { STAGES, FIRST_STAGE, STORE_CONDITIONS, NO_RECORDING_REASONS } = require('../../utils/constants');
 const { listStores } = require('../../services/store');
 const { createVisit, completeUpload } = require('../../services/visit');
 const { uploadSegments } = require('../../services/upload');
@@ -16,6 +16,8 @@ Page({
     stageIndex: 0,
     isFirst: true,
     cooperated: '否',
+    conditions: ['未选择', ...STORE_CONDITIONS],
+    conditionIndex: 0,
     note: '',
     state: 'idle', // idle | recording | paused | stopped
     seconds: 0,
@@ -59,6 +61,9 @@ Page({
   },
   onCoop(e) {
     this.setData({ cooperated: e.currentTarget.dataset.v });
+  },
+  onCondition(e) {
+    this.setData({ conditionIndex: Number(e.detail.value) });
   },
   onNote(e) {
     this.setData({ note: e.detail.value });
@@ -138,6 +143,7 @@ Page({
           success: (r) => {
             if (!r.confirm) return;
             this.userStopped = false;
+            if (!this.startedAt) this.startedAt = Date.now(); // 进店时间：第一次开始录音的时刻
             this.recorder.start(this.recordOptions());
           },
         });
@@ -193,10 +199,39 @@ Page({
     audio.onError(() => audio.destroy());
   },
 
+  // ---- 没有录音：直接登记这次拜访 ----
+  registerNoRecording() {
+    const { stores, storeIndex, stageIndex, isFirst, cooperated, note, conditions, conditionIndex } = this.data;
+    if (storeIndex < 0) return wx.showToast({ title: '请先选择门店', icon: 'none' });
+    return wx.showActionSheet({
+      itemList: NO_RECORDING_REASONS,
+      success: async ({ tapIndex }) => {
+        wx.showLoading({ title: '登记中', mask: true });
+        try {
+          const visit = await createVisit({
+            storeId: stores[storeIndex].id,
+            stage: STAGES[stageIndex],
+            cooperated: isFirst ? cooperated : null,
+            note,
+            durationSec: 0,
+            storeCondition: conditionIndex > 0 ? conditions[conditionIndex] : undefined,
+            recordingMode: 'none',
+            noRecordingReason: NO_RECORDING_REASONS[tapIndex],
+          });
+          wx.hideLoading();
+          wx.redirectTo({ url: `/pages/visit/detail/index?id=${visit.id}` });
+        } catch (err) {
+          wx.hideLoading();
+          wx.showToast({ title: err.message, icon: 'none' });
+        }
+      },
+    });
+  },
+
   // ---- 提交 ----
   async submit() {
     if (this.data.state !== 'stopped' || this.data.submitting) return undefined;
-    const { stores, storeIndex, stageIndex, isFirst, cooperated, note, seconds, segments } = this.data;
+    const { stores, storeIndex, stageIndex, isFirst, cooperated, note, seconds, segments, conditions, conditionIndex } = this.data;
     if (storeIndex < 0) return wx.showToast({ title: '请先选择门店', icon: 'none' });
     if (!segments.length) return wx.showToast({ title: '还没有录音', icon: 'none' });
     this.setData({ submitting: true, step: 1 });
@@ -209,6 +244,8 @@ Page({
         note,
         durationSec: seconds,
         segments,
+        enteredAt: this.startedAt,
+        storeCondition: conditionIndex > 0 ? conditions[conditionIndex] : undefined,
       });
       await uploadSegments(segments, visit.upload, (done, total) => wx.showLoading({ title: `上传 ${done}/${total}`, mask: true }));
       await completeUpload(visit.id, seconds);

@@ -9,7 +9,10 @@ Page({
     this.load();
   },
   async load() {
-    const todos = await listTodos();
+    const todos = (await listTodos()).map((t) => {
+      const hasTarget = t.targetQty !== null && t.targetQty !== undefined;
+      return { ...t, hasTarget, pct: hasTarget && t.targetQty ? Math.min(100, Math.round(((t.achievedQty || 0) / t.targetQty) * 100)) : 0 };
+    });
     this.todos = todos;
     this.setData({ open: todos.filter((t) => !t.done), done: todos.filter((t) => t.done) });
   },

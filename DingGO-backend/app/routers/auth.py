@@ -18,7 +18,7 @@ class LoginIn(BaseModel):
 
 
 def user_out(u: User) -> dict:
-    return {"id": str(u.id), "name": u.name, "role": u.role, "region": u.region}
+    return {"id": str(u.id), "name": u.name, "role": u.role, "region": u.region, "managerId": str(u.manager_id) if u.manager_id else ""}
 
 
 @router.post("/wx-login")
@@ -28,9 +28,6 @@ def wx_login(body: LoginIn, db: Session = Depends(get_db)):
     if user is None:
         user = User(openid=openid, name=body.name or "销售")
         db.add(user)
-        db.commit()
-    elif body.name and body.name != user.name:
-        user.name = body.name
         db.commit()
     return {"token": create_token(user.id), "user": user_out(user)}
 

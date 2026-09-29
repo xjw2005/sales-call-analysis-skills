@@ -1,11 +1,17 @@
-from fastapi import APIRouter, Depends
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import current_user, own_store
-from ..models import Store, StoreCorrection, User
-from ..services.summary import list_visits, summarize_store
+from ..deps import current_user
+from ..models import CorrectionEvent, Store, StoreCorrection, StoreDirectory, StoreProfileSection, User
+from ..services.access import is_manager, team_ids, visible_store
+from ..services.constants import COOPERATION_STATUSES, PROFILE_LABELS, PROFILE_STATES
+from ..services.ingest import upsert_profile_section
+from ..services.summary import list_stores, list_visits, summarize_store
 
 router = APIRouter(prefix="/stores", tags=["门店"])
 
@@ -14,57 +20,149 @@ class StoreIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     province: str = ""
     city: str = ""
+    district: str = ""
     address: str = ""
+    grid: str = ""
+    platform: str | None = None
+    externalId: str | None = None
+    storeType: str = ""
+    cooperationStatus: str = "未触达"
+    contactName: str = ""
+    contactPhone: str = ""
+    lat: float | None = None
+    lng: float | None = None
 
 
 class StorePatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
     province: str | None = None
     city: str | None = None
+    district: str | None = None
     address: str | None = None
-    cooperated: bool | None = None
+    grid: str | None = None
+    storeType: str | None = None
+    cooperationStatus: str | None = None
+    contactName: str | None = None
+    contactPhone: str | None = None
+    installedAt: date | None = None
+    wecomAdded: bool | None = None
 
 
 class CorrectionIn(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
 
+class ProfilePatch(BaseModel):
+    content: str = Field(max_length=5000)
+    state: str | None = None
+
+
+def _check_status(value: str) -> None:
+    if value not in COOPERATION_STATUSES:
+        raise HTTPException(status_code=400, detail=f"合作状态只能是：{'、'.join(COOPERATION_STATUSES)}")
+
+
+def _can_manage(db: Session, user: User, store: Store) -> bool:
+    """能修改门店资料的人：门店负责人或其上级；没有负责人的门店任何能看到的人都能改"""
+    return store.primary_sales_id is None or store.primary_sales_id in team_ids(db, user)
+
+
+def _detail(db: Session, user: User, store: Store) -> dict:
+    visits = list_visits(db, user, store_id=store.id)
+    out = summarize_store(db, store, visits, detail=True)
+    if not (_can_manage(db, user, store) or is_manager(user)):
+        out.pop("contactName", None)
+        out.pop("contactPhone", None)
+    return {**out, "visits": visits}
+
+
+def _slim(store: dict) -> dict:
+    """列表只需要一句话画像等摘要：去掉体积大的档案七维度、行动和闭环，详情接口再带"""
+    out = {k: v for k, v in store.items() if k not in ("profile", "loops", "actions")}
+    out["hasProfile"] = store["profile"] is not None
+    return out
+
+
 @router.get("")
-def list_stores(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    visits = list_visits(db, user)
-    stores = db.query(Store).filter(Store.owner_id == user.id).all()
-    out = [summarize_store(db, s, [v for v in visits if v["storeId"] == str(s.id)]) for s in stores]
-    return sorted(out, key=lambda s: s["lastVisitAt"] or s["createdAt"], reverse=True)
+def get_stores(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return [_slim(s) for s in list_stores(db, user)]
 
 
 @router.post("")
 def create_store(body: StoreIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    store = Store(owner_id=user.id, **body.model_dump())
-    store.name = store.name.strip()
+    _check_status(body.cooperationStatus)
+    data = {
+        "name": body.name.strip(), "province": body.province, "city": body.city, "district": body.district,
+        "address": body.address, "grid": body.grid, "store_type": body.storeType,
+        "cooperation_status": body.cooperationStatus, "contact_name": body.contactName, "contact_phone": body.contactPhone,
+        "lat": body.lat, "lng": body.lng, "primary_sales_id": user.id,
+    }
+    if body.platform and body.externalId:
+        exists = db.scalars(select(Store).where(Store.platform == body.platform, Store.external_id == body.externalId)).first()
+        if exists:
+            raise HTTPException(status_code=409, detail=f"该平台下已有这家门店：{exists.name}")
+        data["platform"], data["external_id"] = body.platform, body.externalId
+        directory = db.scalars(
+            select(StoreDirectory).where(StoreDirectory.platform == body.platform, StoreDirectory.external_id == body.externalId)
+        ).first()
+        if directory:
+            data["directory_id"] = directory.id
+            for field in ("province", "city", "district", "address", "grid"):
+                if not data[field]:
+                    data[field] = getattr(directory, field)
+    store = Store(**data)
     db.add(store)
     db.commit()
-    return summarize_store(db, store, [])
+    return _detail(db, user, store)
 
 
 @router.get("/{store_id}")
 def get_store(store_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    store = own_store(db, user, store_id)
-    visits = list_visits(db, user, store_id=store.id)
-    return {**summarize_store(db, store, visits), "visits": visits}
+    return _detail(db, user, visible_store(db, user, store_id))
 
 
 @router.patch("/{store_id}")
 def update_store(store_id: int, body: StorePatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    store = own_store(db, user, store_id)
-    for k, v in body.model_dump(exclude_none=True).items():
-        setattr(store, k, v)
+    store = visible_store(db, user, store_id)
+    if not _can_manage(db, user, store):
+        raise HTTPException(status_code=403, detail="只有门店负责人或其上级能修改门店资料")
+    if body.cooperationStatus is not None:
+        _check_status(body.cooperationStatus)
+    mapping = {
+        "name": "name", "province": "province", "city": "city", "district": "district", "address": "address", "grid": "grid",
+        "storeType": "store_type", "cooperationStatus": "cooperation_status", "contactName": "contact_name",
+        "contactPhone": "contact_phone", "installedAt": "installed_at", "wecomAdded": "wecom_added",
+    }
+    for field, value in body.model_dump(exclude_none=True).items():
+        setattr(store, mapping[field], value)
     db.commit()
-    return summarize_store(db, store, list_visits(db, user, store_id=store.id))
+    return _detail(db, user, store)
 
 
 @router.post("/{store_id}/corrections")
 def add_correction(store_id: int, body: CorrectionIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    store = own_store(db, user, store_id)
-    db.add(StoreCorrection(store_id=store.id, user_id=user.id, text=body.text.strip()))
+    """DSR 补充的门店事实：下次分析门店档案时作为权威输入"""
+    store = visible_store(db, user, store_id)
+    db.add(StoreCorrection(store_id=store.id, user_id=user.id, text=body.text.strip(), source="app"))
     db.commit()
     return True
+
+
+@router.patch("/{store_id}/profile/{key}")
+def edit_profile(store_id: int, key: str, body: ProfilePatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """直接修改档案某个维度，并留下纠正记录"""
+    store = visible_store(db, user, store_id)
+    if not _can_manage(db, user, store):
+        raise HTTPException(status_code=403, detail="只有门店负责人或其上级能修改门店档案")
+    if key not in PROFILE_LABELS:
+        raise HTTPException(status_code=404, detail="没有这个档案维度")
+    if body.state is not None and body.state not in PROFILE_STATES:
+        raise HTTPException(status_code=400, detail=f"档案状态只能是：{'、'.join(PROFILE_STATES)}")
+    row = db.scalars(select(StoreProfileSection).where(StoreProfileSection.store_id == store.id, StoreProfileSection.key == key)).first()
+    before = {"state": row.state, "content": row.content} if row else None
+    after = {"state": body.state or (row.state if row else "当前状态"), "content": body.content}
+    upsert_profile_section(db, store.id, key, after["state"], after["content"],
+                           evidence=row.evidence if row else None, source_visit_id=row.source_visit_id if row else None, updated_by=user.id)
+    db.add(CorrectionEvent(target_type="profile", store_id=store.id, target_key=key, before=before, after=after, user_id=user.id))
+    db.commit()
+    return _detail(db, user, store)

@@ -8,7 +8,7 @@ from ..config import get_settings
 from ..models import Store, User
 from .constants import ANALYZED, PROCESSING
 from .playbook import DIM_TIPS, GENERAL_QUESTIONS, OBJECTION_FOCUS, OBJECTIONS, PROFILE_QUESTIONS, grade, weakest_dim
-from .summary import list_todos, list_visits, summarize_store
+from .summary import list_stores, list_todos, list_visits, summarize_store
 from .timeutil import fmt_date, fmt_duration
 
 DAY_MS = 24 * 3600 * 1000
@@ -18,10 +18,8 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _stores(db: Session, user: User, visits: list[dict]) -> list[dict]:
-    stores = db.query(Store).filter(Store.owner_id == user.id).all()
-    out = [summarize_store(db, s, [v for v in visits if v["storeId"] == str(s.id)]) for s in stores]
-    return sorted(out, key=lambda s: s["lastVisitAt"] or s["createdAt"], reverse=True)
+def _stores(db: Session, user: User) -> list[dict]:
+    return list_stores(db, user)
 
 
 def compute_steps(store: dict | None, visits: list[dict], todos: list[dict]) -> dict:
@@ -41,9 +39,9 @@ def compute_steps(store: dict | None, visits: list[dict], todos: list[dict]) -> 
 
 
 def today_panel(db: Session, user: User, store_id: str | None) -> dict:
-    visits = list_visits(db, user)
+    visits = list_visits(db, user)  # 我和下属拜访的
     todos = list_todos(db, user)
-    stores = _stores(db, user, visits)
+    stores = _stores(db, user)
     store = next((s for s in stores if s["id"] == store_id), stores[0] if stores else None)
     now = _now_ms()
     stale_ms = get_settings().stale_days * DAY_MS
@@ -53,7 +51,8 @@ def today_panel(db: Session, user: User, store_id: str | None) -> dict:
     due = [t for t in open_ if t["due"]["days"] <= 0]
     follow = [{
         "key": f"todo-{t['id']}", "badge": t["due"]["text"], "tone": t["due"]["tone"],
-        "text": f"{t['storeName']} · {t['topic']}", "sub": t["action"],
+        "text": f"{t['storeName']} · {t['topic']}",
+        "sub": t["action"] or (f"目标 {t['targetQty']:g}，已达成 {(t['achievedQty'] or 0):g}，差 {t['gapQty']:g}" if t["gapQty"] is not None else ""),
         "btn": "完成", "action": "todoDone", "id": t["id"], "subBtn": "复制微信话术", "subAction": "copyMsg",
     } for t in (due or open_[:1])]
     if follow:
@@ -74,7 +73,7 @@ def today_panel(db: Session, user: User, store_id: str | None) -> dict:
 
     review = []
     for v in visits:
-        if v["status"] not in ANALYZED or now - v["createdAt"] >= 3 * DAY_MS or v["reviewed"]:
+        if v["status"] not in ANALYZED or v["legacy"] or now - v["createdAt"] >= 3 * DAY_MS or v["reviewed"]:
             continue
         eff = v["analysis"].get("effectiveness")
         weak = weakest_dim(eff)
@@ -102,7 +101,7 @@ def today_panel(db: Session, user: User, store_id: str | None) -> dict:
         "key": f"stale-{s['id']}", "badge": f"{(now - s['lastVisitAt']) // DAY_MS}天未访", "tone": "muted",
         "text": s["name"], "sub": f"上次卡在：{s['actions'][0].get('topic', '')}" if s["actions"] else "去看看最近情况",
         "btn": "看简报", "action": "openBrief", "id": s["id"],
-    } for s in stores if s["lastVisitAt"] and now - s["lastVisitAt"] > stale_ms]
+    } for s in sorted((x for x in stores if x["lastVisitAt"] and now - x["lastVisitAt"] > stale_ms), key=lambda x: x["lastVisitAt"])[:3]]
     if stale:
         sections.append({"title": "久未拜访", "rows": stale})
 
@@ -120,25 +119,28 @@ def today_panel(db: Session, user: User, store_id: str | None) -> dict:
 
 def brief(db: Session, user: User, store: Store) -> dict:
     visits = list_visits(db, user, store_id=store.id)
-    s = summarize_store(db, store, visits)
+    s = summarize_store(db, store, visits, detail=True)
     s["visits"] = visits
     todos = list_todos(db, user)
-    last = next((v for v in visits if v["status"] in ANALYZED), None)
+    done_any = next((v for v in visits if v["status"] in ANALYZED), None)  # 含从飞书导入的历史拜访
+    last = next((v for v in visits if v["status"] in ANALYZED and not v["legacy"]), None)  # 有结构化分析的最近一次
     out = {
         "store": s,
-        "isFirst": last is None,
-        "lastText": f"{fmt_date(last['createdAt'])} · {last['stage']}" if last else "",
+        "isFirst": done_any is None,
+        "lastText": f"{fmt_date(done_any['createdAt'])} · {done_any['stage']}" if done_any else "",
         "oneLine": s["oneLine"],
         "concerns": [c["name"] for c in last["analysis"]["concerns"] if c.get("state") == "是"] if last else [],
         "openTodos": [t for t in todos if t["storeId"] == s["id"] and not t["done"]],
         "goals": [], "questions": [], "objections": [],
     }
-    if last is None:
+    if done_any is None:
         out["goals"] = ["了解门店基本情况和主营品牌", "找到老板最在意的 1–2 个问题", "约好下一次见面的时间"]
         out["questions"] = list(GENERAL_QUESTIONS)
         out["opening"] = "老板您好，我是 A2 奶粉的业务，今天想花十分钟了解下店里奶粉卖得怎么样，看看有没有能帮上忙的。"
         return out
-    out["goals"] = [f"{a.get('topic', '')}：{a.get('acceptance', '')}" for a in last["analysis"]["nextAction"].get("actions", [])]
+    out["goals"] = [f"{a.get('topic', '')}：{a.get('acceptance', '')}" for a in last["analysis"]["nextAction"].get("actions", [])] if last else []
+    if not out["goals"]:
+        out["goals"] = ["回顾上次沟通，确认待办进展", "补全档案里还没摸清的情况", "约好下一次见面的时间"]
     sections = s["profile"]["sections"] if s["profile"] else []
     out["questions"] = [f"{PROFILE_QUESTIONS[x['key']]}（补全「{x['label']}」）" for x in sections if x["state"] == "未确认" and x["key"] in PROFILE_QUESTIONS]
     out["questions"] += GENERAL_QUESTIONS[: max(0, 2 - len(out["questions"]))]

@@ -90,4 +90,17 @@ const daily = {
   profile: { sections: profileSections.map((s) => (s.key === 'one_line' ? { ...s, content: '社区母婴店，已试销两箱 A2，动销尚可，关注试吃装支持。' } : s)), sourceCount: 2 },
 };
 
-module.exports = { first, daily };
+// 从飞书导入的历史拜访：分析是排好版的原文（按模块分段展示），结构化字段留空
+const legacy = {
+  explicitNeeds: [], implicitNeeds: [], concerns: [], effectiveness: null, quotes: [], profile: { sections: [] },
+  nextAction: { judgement: '', reason: '', confirmed: [], actions: [], revisitValue: '' },
+  legacy: true,
+  legacySections: [
+    { module: 'ai-summary', title: 'AI 拜访摘要', text: '首次拜访，老板对跨境奶粉不熟，担心合规和压货，希望先看价格表和红线价。', evidence: '' },
+    { module: 'explicit-needs', title: '显性需求', text: '1. 需求点：先看价格表和红线价\n   场景：介绍跨境奶粉时\n   解释：客户直接提出要价格表。', evidence: '[00:34.490–00:37.940] 客户：你先把价格表发我看看。' },
+    { module: 'store-profile', title: '门店档案', text: '一句话画像：新开母婴店，老板无母婴经验。\n\n门店基本信息（当前状态）：夫妻店，位置好。', evidence: '' },
+    { module: 'next-action', title: '下一步行动策略', text: '行动判断：触发。\n建议行动：周五前发送价格表和红线价说明。', evidence: '' },
+  ],
+};
+
+module.exports = { first, daily, legacy };

@@ -21,7 +21,7 @@ PROFILE_STATES = ["稳定档案", "当前状态", "未确认"]
 
 STATUSES = [
     "uploading", "cost_pending", "asr_running", "role_classifying", "analyzing", "reviewing",
-    "done", "partial_manual", "invalid_short", "invalid_content", "failed",
+    "done", "partial_manual", "invalid_short", "invalid_content", "failed", "no_recording",
 ]
 PROCESSING = ["uploading", "asr_running", "role_classifying", "analyzing", "reviewing"]
 ANALYZED = ["done", "partial_manual"]
@@ -33,3 +33,17 @@ def visit_mode(stage: str) -> str:
 
 def modules_for(stage: str) -> list[str]:
     return FIRST_MODULES if stage == FIRST_STAGE else DAILY_MODULES
+
+
+# 门店合作状态（主档）；和拜访里的「是否达成合作」（是/否）不是一回事
+COOPERATION_STATUSES = ["已合作", "已触达未合作", "意向中", "未触达"]
+BUSINESS_LINES = ["跨境招商", "装机推广"]
+# 拜访当时门店的状况（旧表「门店匹配状态」）
+STORE_CONDITIONS = ["正常运营", "未找到对接人", "已闭店", "门店休息", "拒绝跨境产品"]
+RECORDING_MODES = ["uploaded", "none"]
+
+# 旧表里的阶段叫法 → 现在分析流水线和小程序用的阶段
+LEGACY_STAGE_MAP = {"陌拜破冰": FIRST_STAGE, "日常拜访": "日常维护"}
+
+USER_ROLES = ["sales", "manager"]
+TODO_SOURCES = ["ai", "manager", "self", "import"]

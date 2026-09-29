@@ -5,9 +5,11 @@
   </view>
   <view class="meta">
     <text wx:if="{{showStore}}" class="tag {{isFirst ? 'primary' : 'muted'}}">{{visit.stage}}</text>
-    <text class="faint">{{time}} · 录音 {{dur}}</text>
+    <text wx:if="{{legacy}}" class="tag info">历史记录</text>
+    <text class="faint">{{time}}{{noRecording ? ' · 无录音' : ' · 录音 ' + dur}}</text>
   </view>
   <view wx:if="{{summary}}" class="summary">{{summary}}</view>
+  <view wx:elif="{{noteBrief}}" class="summary">速记：{{noteBrief}}</view>
   <view wx:if="{{grade}}" class="score row">
     <text class="grade {{grade}}">{{grade}}</text>
     <text class="muted">合作进展 {{score}} 分</text>

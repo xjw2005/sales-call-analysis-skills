@@ -45,3 +45,8 @@
 .customer .utt-bubble { background: #fff; border-top-left-radius: 6rpx; }
 .other .utt-bubble { background: #eef0f5; color: #6b6f8e; font-size: 26rpx; }
 .playing .utt-bubble { box-shadow: 0 0 0 4rpx #f5a623; }
+
+.info-tags { margin-bottom: 12rpx; }
+.info-row { font-size: 27rpx; line-height: 1.7; margin-top: 10rpx; color: #4a4d6b; }
+.legacy-text { font-size: 27rpx; line-height: 1.8; white-space: pre-wrap; }
+.legacy-tip { text-align: left; margin: 0 0 16rpx; }

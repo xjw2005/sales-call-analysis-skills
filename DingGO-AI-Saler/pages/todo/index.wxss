@@ -5,3 +5,7 @@
 .fb { padding: 12rpx 28rpx; border-radius: 999rpx; border: 2rpx solid #e1e2ec; font-size: 26rpx; color: #4a4d6b; }
 .fb-primary { padding: 12rpx 28rpx; border-radius: 999rpx; background: #5b55e8; color: #fff; font-size: 26rpx; }
 .is-done .topic, .is-done .action { color: #a7aac2; text-decoration: line-through; }
+
+.target { font-size: 27rpx; margin: 12rpx 0; }
+.bar { height: 12rpx; border-radius: 6rpx; background: #eef0f5; margin: 10rpx 0; overflow: hidden; }
+.bar-fill { height: 100%; background: linear-gradient(90deg, #8f8af0, #5b55e8); }

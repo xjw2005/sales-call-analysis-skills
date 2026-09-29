@@ -18,6 +18,9 @@
           <view class="opt {{cooperated === '否' ? 'on' : ''}}" data-v="否" bindtap="onCoop">否</view>
         </view>
       </view>
+      <picker range="{{conditions}}" value="{{conditionIndex}}" bindchange="onCondition">
+        <view class="row between field"><text class="muted">门店状况</text><text class="val">{{conditionIndex > 0 ? conditions[conditionIndex] : '选填'}} ›</text></view>
+      </picker>
       <view class="faint mode-tip">{{isFirst ? '首访：7 项分析（需求、关心点、话术评分、金句、档案、行动）' : '日常：4 项分析（需求、关心点、档案累计更新、行动闭环）'}}</view>
     </view>
 
@@ -41,11 +44,12 @@
       </block>
       <view wx:if="{{state === 'stopped'}}" class="faint link" bindtap="reset">重新录音</view>
       <view wx:if="{{state === 'idle' && !importName}}" class="faint link" bindtap="chooseFile">从聊天记录导入音频</view>
+      <view wx:if="{{state === 'idle' && !importName}}" class="faint link" bindtap="registerNoRecording">这次没有录音？直接登记拜访</view>
     </view>
 
     <view class="card">
-      <view class="card-title">门店档案纠正（选填）</view>
-      <textarea class="note" placeholder="记录录音里没说清的门店事实，例如面积、主营品类。AI 会以此为准。" placeholder-class="ph" auto-height maxlength="500" bindinput="onNote" />
+      <view class="card-title">现场速记（选填）</view>
+      <textarea class="note" placeholder="记下这次拜访的要点，例如老板说了什么、答应了什么。AI 分析时会一并参考。" placeholder-class="ph" auto-height maxlength="500" bindinput="onNote" />
     </view>
 
     <!-- 步骤条（对应 ①拍药识别 ②添加药品 ③药箱管理） -->

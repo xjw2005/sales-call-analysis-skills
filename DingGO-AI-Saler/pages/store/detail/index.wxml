@@ -2,7 +2,7 @@
   <view class="container">
     <view class="row head">
       <view class="pill"><view class="pill-avatar">店</view><view class="pill-name">{{store.name}}</view></view>
-      <text class="tag {{store.cooperated ? 'success' : 'muted'}} coop">{{store.cooperated ? '已合作' : '未合作'}}</text>
+      <text class="tag {{coopTone}} coop">{{store.cooperationStatus}}</text>
     </view>
     <view class="faint addr">{{store.province}}{{store.city}} {{store.address}}</view>
 

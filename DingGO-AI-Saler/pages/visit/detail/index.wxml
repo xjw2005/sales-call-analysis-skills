@@ -8,12 +8,30 @@
       </view>
       <view class="row gap meta">
         <text class="tag {{visit.mode === 'first' ? 'primary' : 'muted'}}">{{visit.stage}}</text>
-        <text class="faint">{{visit.time}} · 录音 {{visit.dur}}</text>
+        <text wx:if="{{visit.legacy}}" class="tag info">历史记录</text>
+        <text class="faint">{{visit.time}}{{visit.status === 'no_recording' ? ' · 无录音' : ' · 录音 ' + visit.dur}}</text>
       </view>
     </view>
 
+    <!-- 拜访信息 -->
+    <view wx:if="{{hasInfo}}" class="card">
+      <view class="card-title">拜访信息</view>
+      <view wx:if="{{visit.purposes.length || visit.storeCondition}}" class="row wrap gap info-tags">
+        <text wx:for="{{visit.purposes}}" wx:key="*this" class="tag primary">{{item}}</text>
+        <text wx:if="{{visit.storeCondition}}" class="tag {{visit.storeCondition === '正常运营' ? 'success' : 'warn'}}">{{visit.storeCondition}}</text>
+      </view>
+      <view wx:if="{{visit.note}}" class="info-row"><text class="k">现场速记</text><text user-select>{{visit.note}}</text></view>
+      <view wx:if="{{visit.surveyText}}" class="info-row"><text class="k">门店调研</text>{{visit.surveyText}}</view>
+      <view wx:if="{{visit.checkin && visit.checkin.address}}" class="info-row"><text class="k">打卡位置</text>{{visit.checkin.address}}</view>
+    </view>
+
+    <!-- 无录音 -->
+    <view wx:if="{{visit.status === 'no_recording'}}" class="card">
+      <empty-state compact title="本次拜访没有录音" desc="{{visit.noRecordingReason ? '原因：' + visit.noRecordingReason : '没有录音，不做语音识别和 AI 分析。'}}" />
+    </view>
+
     <!-- 处理进度（对应流程图） -->
-    <view class="card">
+    <view wx:if="{{visit.status !== 'no_recording' && !visit.legacy}}" class="card">
       <view class="row between" bindtap="toggleTimeline">
         <view class="card-title">处理进度</view>
         <text class="faint">{{showTimeline ? '收起' : '展开'}}</text>
@@ -27,7 +45,8 @@
       <view class="row between cost-row"><text class="muted">录音时长</text><text>{{visit.dur}}</text></view>
       <view class="row between cost-row"><text class="muted">预估识别费用</text><text class="price">¥{{visit.estCost}}</text></view>
       <view class="faint">确认后将进行语音识别、对话整理和 AI 分析（{{visit.mode === 'first' ? '首访 7 个模块' : '日常 4 个模块'}}）。</view>
-      <view class="row gap cost-btns">
+      <view wx:if="{{visit.legacy}}" class="faint legacy-tip">这条历史记录的录音文件还没有迁移到新系统，暂时不能识别。</view>
+      <view wx:else class="row gap cost-btns">
         <view class="btn-ghost flex1" bindtap="later">暂不识别</view>
         <view class="btn-primary flex1" bindtap="confirm">确认识别</view>
       </view>
@@ -45,6 +64,17 @@
       <view class="segment">
         <view wx:for="{{tabs}}" wx:key="*this" class="segment-item {{tab === index ? 'active' : ''}}" data-i="{{index}}" bindtap="switchTab">{{item}}</view>
       </view>
+
+      <!-- 历史记录（从飞书导入的分析原文） -->
+      <block wx:if="{{tabs[tab] === '历史记录'}}">
+        <view class="faint disclaimer legacy-tip">这条拜访是从飞书导入的历史记录，分析结果为原文；录音转写完成新的分析后会替换成结构化结果。</view>
+        <view wx:for="{{a.legacySections}}" wx:key="module" class="card">
+          <view class="card-title">{{item.title}}<ai-badge /></view>
+          <view class="legacy-text"><text user-select>{{item.text}}</text></view>
+          <view wx:if="{{item.evidence}}" class="quote"><text user-select>{{item.evidence}}</text></view>
+        </view>
+        <view wx:if="{{!a.legacySections.length}}" class="faint disclaimer">详情页里可以看到完整的分析原文</view>
+      </block>
 
       <!-- 洞察 -->
       <block wx:if="{{tabs[tab] === '洞察'}}">
@@ -152,7 +182,9 @@
 
       <!-- 对话 -->
       <block wx:if="{{tabs[tab] === '对话'}}">
+        <view wx:if="{{visit.audioMissing}}" class="faint disclaimer legacy-tip">录音文件还没有迁移到新系统，暂时无法播放。</view>
         <view class="legend-row row gap"><text class="tag primary">销售</text><text class="tag info">客户</text><text class="tag muted">旁人</text><text class="faint">点击时间可跳播</text></view>
+        <view wx:if="{{!transcript.length && visit.transcriptRaw}}" class="card"><text user-select class="legacy-text">{{visit.transcriptRaw}}</text></view>
         <view wx:for="{{transcript}}" wx:key="uid" class="utt {{item.role === '销售' ? 'sales' : item.role === '客户' ? 'customer' : 'other'}} {{playingUid === item.uid ? 'playing' : ''}}">
           <view class="utt-meta" data-ms="{{item.startMs}}" data-uid="{{item.uid}}" bindtap="seek">{{item.role}} · ▶ {{item.ts}}</view>
           <view class="utt-bubble"><text user-select>{{item.text}}</text></view>

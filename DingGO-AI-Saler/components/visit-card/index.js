@@ -15,7 +15,10 @@ Component({
         dur: fmt.duration(v.durationSec),
         grade: eff ? fmt.grade(eff.total) : '',
         score: eff ? eff.total : null,
-        summary: v.analysis ? v.analysis.profile.sections[0].content : '',
+        summary: v.analysis && v.analysis.profile && v.analysis.profile.sections.length ? v.analysis.profile.sections[0].content : '',
+        legacy: !!v.legacy,
+        noRecording: v.status === 'no_recording',
+        noteBrief: v.note ? (v.note.length > 40 ? `${v.note.slice(0, 40)}…` : v.note) : '',
       });
     },
   },

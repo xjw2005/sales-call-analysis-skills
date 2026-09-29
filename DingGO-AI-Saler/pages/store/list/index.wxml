@@ -7,7 +7,7 @@
     <view wx:for="{{shown}}" wx:key="id" class="card store" data-id="{{item.id}}" bindtap="openStore">
       <view class="row between">
         <view class="row"><view class="pill-avatar small">店</view><text class="name">{{item.name}}</text></view>
-        <text class="tag {{item.cooperated ? 'success' : 'muted'}}">{{item.cooperated ? '已合作' : '未合作'}}</text>
+        <text class="tag {{item.coopTone}}">{{item.cooperationStatus}}</text>
       </view>
       <view wx:if="{{item.oneLine}}" class="one-line">{{item.oneLine}}</view>
       <view class="faint">{{item.city}} {{item.address}}</view>

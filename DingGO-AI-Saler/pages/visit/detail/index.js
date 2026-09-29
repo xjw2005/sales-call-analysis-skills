@@ -52,11 +52,30 @@ Page({
 
   render(visit) {
     const isFirst = visit.mode === 'first';
+    const survey = visit.survey || {};
     const patch = {
-      visit: { ...visit, time: fmt.date(visit.createdAt), dur: fmt.duration(visit.durationSec) },
+      visit: {
+        ...visit,
+        time: fmt.date(visit.createdAt),
+        dur: fmt.duration(visit.durationSec),
+        purposes: visit.purposes || [],
+        surveyText: [survey.area && `面积 ${survey.area}`, survey.storeType && survey.storeType, survey.crossBorder && `跨境：${survey.crossBorder}`,
+          survey.monthlyTotal != null && `全品类月均 ${survey.monthlyTotal} 罐`, survey.a2MonthlyEst != null && `A2 月均预估 ${survey.a2MonthlyEst} 罐`]
+          .filter(Boolean).join(' · '),
+      },
       status: STATUS[visit.status] || {},
     };
-    if (visit.status === 'done' && visit.analysis) {
+    // 拜访信息卡：有目的、门店状况、速记、打卡地址或调研信息时才显示
+    const checkin = visit.checkin || {};
+    patch.hasInfo = !!((visit.purposes || []).length || visit.storeCondition || visit.note || checkin.address || patch.visit.surveyText);
+    if (visit.status === 'done' && visit.analysis && visit.analysis.legacy) {
+      // 从飞书导入的历史拜访：分析是原文，按模块分段展示
+      patch.a = visit.analysis;
+      patch.tabs = ['历史记录', '对话'];
+      patch.grade = '';
+      patch.transcript = (visit.transcript || []).map((u) => ({ ...u, ts: fmt.timestamp(u.startMs) }));
+      if (!this.data.a) patch.showTimeline = false;
+    } else if (visit.status === 'done' && visit.analysis) {
       const a = visit.analysis;
       patch.a = {
         ...a,

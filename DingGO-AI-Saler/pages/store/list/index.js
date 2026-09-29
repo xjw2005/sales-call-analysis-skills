@@ -1,5 +1,6 @@
 const setTab = require('../../../utils/tab');
 const fmt = require('../../../utils/format');
+const { COOP_TONE } = require('../../../utils/constants');
 const { listStores } = require('../../../services/store');
 
 Page({
@@ -11,6 +12,7 @@ Page({
   async load() {
     const stores = (await listStores()).map((s) => ({
       ...s,
+      coopTone: COOP_TONE[s.cooperationStatus] || 'muted',
       lastText: s.lastVisitAt ? `最近拜访 ${fmt.date(s.lastVisitAt)}` : '尚未拜访',
     }));
     this.setData({ stores, loaded: true });

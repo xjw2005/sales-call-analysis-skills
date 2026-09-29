@@ -52,6 +52,7 @@ const STATUS = {
   invalid_short: { text: '录音过短', tone: 'muted' },
   invalid_content: { text: '内容无效', tone: 'muted' },
   failed: { text: '处理失败', tone: 'error' },
+  no_recording: { text: '无录音', tone: 'muted' },
 };
 
 // 时间线节点：key 为节点，statuses 为处于该节点时的状态
@@ -67,7 +68,15 @@ const TIMELINE = [
 
 const VALID_MIN_SECONDS = 120;
 
+// 门店合作状态（4 种）和对应标签颜色；与拜访里的「是否达成合作」（是/否）不是一回事
+const COOPERATION_STATUSES = ['已合作', '已触达未合作', '意向中', '未触达'];
+const COOP_TONE = { 已合作: 'success', 已触达未合作: 'warn', 意向中: 'info', 未触达: 'muted' };
+// 拜访当时门店的状况
+const STORE_CONDITIONS = ['正常运营', '未找到对接人', '已闭店', '门店休息', '拒绝跨境产品'];
+const NO_RECORDING_REASONS = ['对方不同意录音', '环境太吵不便录音', '忘记录音', '手机或网络问题', '其他原因'];
+
 module.exports = {
   FIRST_STAGE, DAILY_STAGES, STAGES, CONCERN_NAMES, DIMENSIONS, PROFILE_SECTIONS,
   FIRST_MODULES, DAILY_MODULES, MODULE_LABELS, STATUS, TIMELINE, VALID_MIN_SECONDS,
+  COOPERATION_STATUSES, COOP_TONE, STORE_CONDITIONS, NO_RECORDING_REASONS,
 };

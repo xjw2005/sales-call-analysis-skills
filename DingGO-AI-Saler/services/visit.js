@@ -31,8 +31,17 @@ function simulate(v) {
   if (out.status === 'done') {
     out.moduleDone = modules.length;
     out.analysis = clone(mockAnalysis[out.analysisKey || out.mode]);
-    out.transcript = clone(transcript);
+    out.legacy = !!v.legacy;
+    // 历史拜访：转写只有原文，录音还没迁移
+    out.transcript = v.legacy ? [] : clone(transcript);
+    out.transcriptRaw = v.legacy ? '[00:11.450–00:12.290] 销售：老板您好，我是 A2 的业务。\n[00:34.490–00:37.940] 客户：你先把价格表发我看看。' : '';
+    out.audioMissing = v.legacy ? 1 : 0;
   }
+  out.purposes = v.purposes || [];
+  out.checkin = v.checkin || { address: '' };
+  out.storeCondition = v.storeCondition || '';
+  out.recordingMode = v.recordingMode || 'uploaded';
+  out.noRecordingReason = v.noRecordingReason || '';
   const store = seed.stores.find((st) => st.id === v.storeId);
   out.storeName = store ? store.name : '';
   return out;
@@ -53,16 +62,20 @@ function getVisit(id) {
   return v ? delay(simulate(v)) : Promise.reject(new Error('拜访记录不存在'));
 }
 
-// 新建拜访：真实模式下先拿上传凭证，再逐段上传录音（见 services/upload.js）
-function createVisit({ storeId, stage, cooperated, note, durationSec, segments }) {
-  if (!config.useMock) return request({ url: '/visits', method: 'POST', data: { storeId, stage, cooperated, note, durationSec } });
+// 新建拜访：真实模式下先拿上传凭证，再逐段上传录音（见 services/upload.js）。
+// recordingMode 为 'none' 时是「登记无录音拜访」，不需要上传
+function createVisit({ storeId, stage, cooperated, note, durationSec, segments, enteredAt, storeCondition, recordingMode = 'uploaded', noRecordingReason = '' }) {
+  if (!config.useMock) {
+    return request({ url: '/visits', method: 'POST', data: { storeId, stage, cooperated, note, durationSec, enteredAt, storeCondition, recordingMode, noRecordingReason } });
+  }
+  const none = recordingMode === 'none';
   const v = {
     id: `v${Date.now()}`,
-    storeId, stage, cooperated, note, segments,
-    createdAt: Date.now(),
-    durationSec,
-    estCost: Math.round(durationSec * 0.00035 * 100) / 100,
-    status: 'cost_pending',
+    storeId, stage, cooperated, note, segments, storeCondition, recordingMode, noRecordingReason,
+    createdAt: enteredAt || Date.now(),
+    durationSec: durationSec || 0,
+    estCost: Math.round((durationSec || 0) * 0.00035 * 100) / 100,
+    status: none ? 'no_recording' : 'cost_pending',
   };
   seed.visits.push(v);
   return delay(simulate(v), 600);

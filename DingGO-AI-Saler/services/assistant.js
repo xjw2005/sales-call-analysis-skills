@@ -31,7 +31,7 @@ async function getTodayPanel(currentStoreId) {
   const due = open.filter((t) => t.due.days <= 0);
   const followRows = (due.length ? due : open.slice(0, 1)).map((t) => ({
     key: `todo-${t.id}`, badge: t.due.text, tone: t.due.tone,
-    text: `${t.storeName} · ${t.topic}`, sub: t.action,
+    text: `${t.storeName} · ${t.topic}`, sub: t.action || (t.targetQty != null ? `目标 ${t.targetQty}，已达成 ${t.achievedQty || 0}，差 ${t.gapQty}` : ''),
     btn: '完成', action: 'todoDone', id: t.id,
     subBtn: '复制微信话术', subAction: 'copyMsg',
   }));
@@ -54,7 +54,7 @@ async function getTodayPanel(currentStoreId) {
   // 拜访复盘：3 天内新完成、未看过
   const seen = storage.get(REVIEW_KEY, []);
   const reviewRows = visits
-    .filter((v) => v.status === 'done' && Date.now() - v.createdAt < 3 * DAY && seen.indexOf(v.id) < 0)
+    .filter((v) => v.status === 'done' && !v.legacy && Date.now() - v.createdAt < 3 * DAY && seen.indexOf(v.id) < 0)
     .map((v) => {
       const eff = v.analysis.effectiveness;
       const weak = weakestDim(eff);
@@ -132,11 +132,12 @@ function computeSteps(store, visits, todos) {
 async function getBrief(storeId) {
   if (!config.useMock) return request({ url: `/assistant/brief/${storeId}` });
   const [store, todos] = await Promise.all([getStore(storeId), listTodos()]);
-  const last = store.visits.find((v) => v.status === 'done');
+  const doneAny = store.visits.find((v) => v.status === 'done'); // 含历史（飞书导入）的拜访
+  const last = store.visits.find((v) => v.status === 'done' && !v.legacy); // 有结构化分析的最近一次
   const brief = {
     store,
-    isFirst: !last,
-    lastText: last ? `${fmt.date(last.createdAt)} · ${last.stage}` : '',
+    isFirst: !doneAny,
+    lastText: doneAny ? `${fmt.date(doneAny.createdAt)} · ${doneAny.stage}` : '',
     oneLine: store.oneLine,
     concerns: last ? last.analysis.concerns.filter((c) => c.state === '是').map((c) => c.name) : [],
     openTodos: todos.filter((t) => t.storeId === storeId && !t.done),
@@ -144,13 +145,14 @@ async function getBrief(storeId) {
     questions: [],
     objections: [],
   };
-  if (!last) {
+  if (!doneAny) {
     brief.goals = ['了解门店基本情况和主营品牌', '找到老板最在意的 1–2 个问题', '约好下一次见面的时间'];
     brief.questions = GENERAL_QUESTIONS.slice();
     brief.opening = `老板您好，我是 A2 奶粉的业务，今天想花十分钟了解下店里奶粉卖得怎么样，看看有没有能帮上忙的。`;
   } else {
-    brief.goals = last.analysis.nextAction.actions.map((a) => `${a.topic}：${a.acceptance}`);
-    brief.questions = store.profile.sections
+    brief.goals = last ? last.analysis.nextAction.actions.map((a) => `${a.topic}：${a.acceptance}`) : [];
+    if (!brief.goals.length) brief.goals = ['回顾上次沟通，确认待办进展', '补全档案里还没摸清的情况', '约好下一次见面的时间'];
+    brief.questions = (store.profile ? store.profile.sections : [])
       .filter((s) => s.state === '未确认' && PROFILE_QUESTIONS[s.key])
       .map((s) => `${PROFILE_QUESTIONS[s.key]}（补全「${s.label}」）`);
     if (brief.questions.length < 2) brief.questions.push(...GENERAL_QUESTIONS.slice(0, 2 - brief.questions.length));

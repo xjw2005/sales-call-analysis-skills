@@ -6,12 +6,16 @@ const { listVisits } = require('./visit');
 // 由最近的拜访结果汇总门店仪表与档案
 function summarize(store, visits) {
   const done = visits.filter((v) => v.status === 'done');
-  const latest = done[0];
-  const latestFirst = done.find((v) => v.analysis.effectiveness);
-  const latestLoop = done.find((v) => v.analysis.loop);
+  const structured = done.filter((v) => !v.legacy); // 历史（飞书导入）拜访没有结构化分析，不参与仪表
+  const latest = structured[0];
+  const latestFirst = structured.find((v) => v.analysis.effectiveness);
+  const latestLoop = structured.find((v) => v.analysis.loop);
+  const cooperationStatus = store.cooperationStatus || (store.cooperated ? '已合作' : '未触达');
   const loopItems = latestLoop ? latestLoop.analysis.loop.items : [];
   return {
     ...store,
+    cooperationStatus,
+    cooperated: cooperationStatus === '已合作',
     visitCount: visits.length,
     lastVisitAt: visits[0] ? visits[0].createdAt : null,
     profile: latest ? { ...latest.analysis.profile, sourceCount: done.length } : null,
@@ -22,7 +26,7 @@ function summarize(store, visits) {
       loopRate: loopItems.length ? Math.round((loopItems.filter((i) => i.status === '已完成').length / loopItems.length) * 100) : null,
     },
     actions: latest ? latest.analysis.nextAction.actions : [],
-    loops: done.filter((v) => v.analysis.loop).map((v) => ({ visitId: v.id, createdAt: v.createdAt, items: v.analysis.loop.items })),
+    loops: structured.filter((v) => v.analysis.loop).map((v) => ({ visitId: v.id, createdAt: v.createdAt, items: v.analysis.loop.items })),
   };
 }
 
@@ -44,7 +48,7 @@ async function getStore(id) {
 
 function createStore(data) {
   if (!config.useMock) return request({ url: '/stores', method: 'POST', data });
-  const store = { id: `s${Date.now()}`, cooperated: false, createdAt: Date.now(), ...data };
+  const store = { id: `s${Date.now()}`, cooperationStatus: '未触达', createdAt: Date.now(), ...data };
   seed.stores.push(store);
   return delay(store);
 }

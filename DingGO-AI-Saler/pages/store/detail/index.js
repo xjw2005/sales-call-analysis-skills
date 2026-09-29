@@ -1,11 +1,12 @@
 const fmt = require('../../../utils/format');
+const { COOP_TONE } = require('../../../utils/constants');
 const { getStore, submitCorrection } = require('../../../services/store');
 
 const STATE_TONE = { 稳定档案: 'success', 当前状态: 'info', 未确认: 'muted' };
 const app = getApp();
 
 Page({
-  data: { id: '', store: null, tab: 0, tabs: ['门店档案', '拜访记录', '行动闭环'], grade: '', sections: [] },
+  data: { id: '', coopTone: 'muted', store: null, tab: 0, tabs: ['门店档案', '拜访记录', '行动闭环'], grade: '', sections: [] },
   onLoad({ id }) {
     this.setData({ id });
   },
@@ -17,7 +18,7 @@ Page({
       const store = await getStore(this.data.id);
       const sections = store.profile ? store.profile.sections.map((s) => ({ ...s, tone: STATE_TONE[s.state] || 'muted' })) : [];
       store.loops = store.loops.map((l) => ({ ...l, time: fmt.date(l.createdAt) }));
-      this.setData({ store, sections, grade: fmt.grade(store.metrics.score) });
+      this.setData({ store, sections, coopTone: COOP_TONE[store.cooperationStatus] || 'muted', grade: fmt.grade(store.metrics.score) });
       wx.setNavigationBarTitle({ title: store.name });
     } catch (err) {
       wx.showToast({ title: err.message, icon: 'none' });

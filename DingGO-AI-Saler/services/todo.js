@@ -3,6 +3,7 @@ const { request, delay } = require('./request');
 const { listVisits } = require('./visit');
 const storage = require('../utils/storage');
 const fmt = require('../utils/format');
+const seed = require('../model/seed');
 
 const DAY = 24 * 3600 * 1000;
 const DONE_KEY = 'todoDone';
@@ -37,11 +38,21 @@ async function listTodos() {
       const dueAt = endOfDay(v.createdAt + (a.dueDays || 3) * DAY);
       const id = `${v.id}-${i}`;
       todos.push({
-        ...a, id, visitId: v.id, storeId: v.storeId, storeName: v.storeName,
+        ...a, id, source: 'ai', visitId: v.id, storeId: v.storeId, storeName: v.storeName,
         dueAt, due: dueText(dueAt), dueDate: fmt.date(dueAt).split(' ')[0],
-        done: done.indexOf(id) >= 0,
+        done: done.indexOf(id) >= 0, targetQty: null, achievedQty: null, gapQty: null, unit: '', progressNote: '',
       });
     });
+  });
+  // 月度目标类待办（旧「后续行动」表）：有目标数量和达成数量，差额 = 目标 - 达成
+  const monthEnd = new Date();
+  const goalDue = endOfDay(new Date(monthEnd.getFullYear(), monthEnd.getMonth() + 1, 0).getTime());
+  const goalStore = seed.stores.find((s) => s.id === 's1');
+  todos.push({
+    id: 't-goal-s1', source: 'import', visitId: '', storeId: goalStore.id, storeName: goalStore.name,
+    topic: `${monthEnd.getMonth() + 1}月任务拆解`, action: '', owner: '销售', timeframe: '', reason: '', acceptance: '',
+    dueAt: goalDue, due: dueText(goalDue), dueDate: fmt.date(goalDue).split(' ')[0], done: done.indexOf('t-goal-s1') >= 0,
+    targetQty: 60, achievedQty: 36, gapQty: 24, unit: '罐', progressNote: '月中下单，本月指标已和老板确认。',
   });
   return delay(todos.sort((a, b) => a.dueAt - b.dueAt));
 }
