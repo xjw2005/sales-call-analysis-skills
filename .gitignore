@@ -13,3 +13,7 @@ __pycache__/
 *.flac
 *.pcm
 *.raw
+
+# 本机配置（含飞书表标识、本机路径等），不要提交
+**/config.local.json
+.env
