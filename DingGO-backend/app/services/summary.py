@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import (
-    Store, StoreCorrection, StoreProfileSection, Todo, User, Visit, VisitAnalysis, VisitSegment, VisitTranscript,
+    Store, StoreCorrection, StoreProfileSection, Todo, User, Visit, VisitAnalysis, VisitPipeline, VisitSegment, VisitTranscript,
 )
 from . import storage
 from .access import store_filter, team_ids, visit_filter
@@ -166,6 +166,11 @@ def serialize_visits(db: Session, visits: list[Visit], full: bool = False) -> li
             item["audioUrls"] = [storage.url_of(s.object_key) for s in playable]
             item["audioUrl"] = item["audioUrls"][0] if playable else ""
             item["audioMissing"] = len(segs) - len(playable)
+            pipe = db.get(VisitPipeline, vid)
+            item["pipeline"] = {
+                "stage": pipe.stage, "errorStage": pipe.error_stage, "error": pipe.error, "uncertain": pipe.uncertain,
+                "validity": pipe.validity or None,
+            } if pipe else None
             tr = db.get(VisitTranscript, vid)
             item["transcript"] = tr.utterances if tr else []
             item["transcriptRaw"] = tr.raw_text if tr and not tr.utterances else ""

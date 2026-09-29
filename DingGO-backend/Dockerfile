@@ -8,6 +8,10 @@ ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 COPY requirements.txt .
 RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
 
+# 火山 LAS 命令行（lasutil，语音转写用）；下载失败不会阻断构建，但转写时会提示找不到 lasutil
+ARG LAS_SDK_URL=https://hyy-rd.tos-cn-beijing.volces.com/skills/sdk/las_sdk-0.2.0-py3-none-any.whl
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} "${LAS_SDK_URL}" || echo "WARNING: las_sdk 安装失败，语音转写不可用，请检查网络后重新构建"
+
 COPY . .
 
 EXPOSE 8000

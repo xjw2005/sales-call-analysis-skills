@@ -188,6 +188,24 @@ class VisitTranscript(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class VisitPipeline(Base):
+    """AI 处理进度（每条有录音的拜访一行）：断点续跑、防重复提交转写。
+    stage：queued | asr_submit | asr_poll | roles | validity | analysis | done | failed"""
+
+    __tablename__ = "visit_pipeline"
+
+    visit_id: Mapped[int] = mapped_column(ForeignKey("visits.id"), primary_key=True)
+    stage: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    las_tasks: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{seq, taskId, status}]，有 taskId 就不再提交
+    error_stage: Mapped[str] = mapped_column(String(16), default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    uncertain: Mapped[bool] = mapped_column(Boolean, default=False)  # 提交转写时无法确认是否已建任务：禁止自动重提
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # 各步骤 token 用量、模型
+    validity: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # {value, reason, source}
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class VisitAnalysis(Base):
     """分析结果，每个模块一行（explicit-needs、concerns、store-profile……）。
     result 是模型原始结果；销售改过的放 corrected_result，展示时优先用后者"""

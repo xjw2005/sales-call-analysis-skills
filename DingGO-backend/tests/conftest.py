@@ -12,6 +12,12 @@ os.environ.update({
     "JWT_SECRET": "test-secret",
     "WX_SECRET": "",
     "DEV_LOGIN": "true",
+    # AI 相关：假密钥让 configured() 为真；后台线程在测试里关闭，由用例直接调用 run_visit
+    "LAS_API_KEY": "test-las",
+    "LLM_API_URL": "http://llm.invalid/v1",
+    "LLM_API_KEY": "test-llm",
+    "AI_WORKER": "false",
+    "KNOWLEDGE_ENABLED": "false",
 })
 
 from fastapi.testclient import TestClient  # noqa: E402

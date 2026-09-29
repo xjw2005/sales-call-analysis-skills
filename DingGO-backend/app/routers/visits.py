@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..db import get_db
 from ..deps import current_user
-from ..models import CorrectionEvent, User, Visit, VisitAnalysis, VisitSegment, utcnow
+from ..models import CorrectionEvent, User, Visit, VisitAnalysis, VisitSegment, VisitTranscript, utcnow
+from ..ai import worker
 from ..services import storage
 from ..services.access import actionable_visit, visible_store, visible_visit
 from ..services.audio import duration_ms
@@ -202,17 +203,45 @@ def confirm_cost(visit_id: int, db: Session = Depends(get_db), user: User = Depe
     segments = db.scalars(select(VisitSegment).where(VisitSegment.visit_id == v.id)).all()
     if segments and all(seg.file_missing for seg in segments):
         raise HTTPException(status_code=409, detail="这条历史记录的录音文件还没有迁移到服务器，暂时不能识别")
+    if not worker.configured():
+        raise HTTPException(status_code=503, detail="语音识别与分析服务还没有配置，请联系管理员")
+    since = utcnow() - timedelta(days=1)
+    used = db.scalar(select(func.count()).select_from(Visit).where(Visit.visitor_id == user.id, Visit.confirmed_at >= since)) or 0
+    if used >= get_settings().daily_visit_limit:
+        raise HTTPException(status_code=429, detail=f"今天已确认识别 {used} 条录音，达到每日上限，请明天再试或联系管理员")
     v.confirmed_at = utcnow()
-    # 语音识别与分析（火山引擎）尚未接入：先停在「语音识别中」，由后续流水线或导入脚本推进
-    v.status = "asr_running"
+    worker.enqueue(db, v)  # 后台线程接手：转写 → 角色 → 有效性 → 分析
+    db.commit()
+    return serialize_visit(db, v, full=True)
+
+
+@router.post("/{visit_id}/retry")
+def retry_visit(visit_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """处理失败后从失败的那一步继续（已提交的转写任务不会重复提交）"""
+    v = actionable_visit(db, user, visit_id)
+    try:
+        worker.retry(db, v)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     db.commit()
     return serialize_visit(db, v, full=True)
 
 
 @router.post("/{visit_id}/rejudge")
 def rejudge(visit_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    actionable_visit(db, user, visit_id)
-    raise HTTPException(status_code=501, detail="重新判定需要 AI 功能，尚未接入")
+    """销售认为系统判成「录音过短/内容无效」不对：人工判为有效，直接进入分析（转写已有，不再花转写费）"""
+    v = actionable_visit(db, user, visit_id)
+    if v.status not in ("invalid_short", "invalid_content"):
+        raise HTTPException(status_code=409, detail="只有被判为无效的录音才能重新判定")
+    if not worker.configured():
+        raise HTTPException(status_code=503, detail="语音识别与分析服务还没有配置，请联系管理员")
+    if db.get(VisitTranscript, v.id) is None:
+        raise HTTPException(status_code=409, detail="这条拜访没有转写内容，无法分析")
+    worker.rejudge(db, v)
+    db.commit()
+    return serialize_visit(db, v, full=True)
 
 
 @router.patch("/{visit_id}/analysis/{module}")

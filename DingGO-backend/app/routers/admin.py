@@ -110,3 +110,19 @@ def import_analysis(visit_id: int, body: AnalysisIn, db: Session = Depends(get_d
         raise HTTPException(status_code=404, detail="拜访记录不存在")
     apply_analysis(db, v, body.analysis, body.transcript)
     return serialize_visit(db, v, full=True)
+
+
+@router.post("/visits/{visit_id}/retry")
+def force_retry(visit_id: int, force: bool = False, db: Session = Depends(get_db)):
+    """管理员重试失败的处理任务。force=true 用于「无法确认是否已提交转写」的拜访：
+    必须先在火山 LAS 控制台核对该拜访是否已经产生任务，确认没有再强制重试"""
+    from ..ai import worker
+    v = db.get(Visit, visit_id)
+    if v is None:
+        raise HTTPException(status_code=404, detail="拜访不存在")
+    try:
+        worker.retry(db, v, force=force)
+    except (ValueError, PermissionError) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    db.commit()
+    return {"ok": True, "status": v.status}

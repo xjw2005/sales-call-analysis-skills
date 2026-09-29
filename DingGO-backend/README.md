@@ -2,7 +2,7 @@
 
 Python + FastAPI + MySQL，给小程序 `DingGO-AI-Saler` 提供真实数据，替代飞书多维表（01 门店主档、02 门店拜访记录）。
 第一期只做基础功能：登录、门店、拜访（含无录音拜访）、录音上传、费用确认、待办（含月度目标）、今日待办、进店前简报、旧数据导入。
-**AI 功能（语音识别、销售分析、问答、陪练）尚未接入**：确认费用后拜访停在「语音识别中」；分析结果可先用导入工具写入。
+**AI 录音链路（转写 + 分析）已接入**，见「AI 录音链路」一节，配置密钥后启用；首页问答和陪练尚未接入（返回 501）。
 
 ## 上线顺序总览
 
@@ -147,7 +147,20 @@ SQL
 # 不用 Docker：把上面三条 DELETE 语句放进  mysql -udinggo -p dinggo  里执行
 ```
 
-### 备份
+### AI 录音链路（转写 + 分析）
+
+销售确认识别费用后，后台线程自动处理：**火山 LAS 转写 → 多段合并 → 角色标注（销售/客户/旁人）→ 有效性判断 → 分析模块（首访 7 个 / 日常 4 个）→ 写入分析结果、门店档案、待办**。逻辑移植自 `sales-call-analysis-scripted` 和 `lark-sales-audio-asr-scripted`，证据校验规则与原流水线一致；提示词在 `app/ai/prompts/`，知识库在 `knowledge/a2/`（更新后重新部署即可）。
+
+- 启用条件：`.env` 里同时填了 `LAS_API_KEY`、`LLM_API_URL`、`LLM_API_KEY`（见 `.env.example`）；没填时「确认识别」会提示服务还没配置，其他功能不受影响。密钥只写在服务器 `.env`，不要提交、不要发到聊天里。
+- 火山 LAS 命令行 `lasutil` 在 Docker 镜像构建时安装（`LAS_SDK_URL`）；构建日志出现 `WARNING: las_sdk 安装失败` 说明网络不通，转写会提示「找不到 lasutil」。
+- 进度存在 `visit_pipeline` 表（新增迁移 `0002`，部署时自动升级）：进程重启后自动从断点继续；**已提交的转写任务不会重复提交**（防重复计费）。
+- 失败处理：拜访详情页显示失败的步骤和原因，销售点「重新处理」从失败的那一步继续。若失败发生在「提交转写」且无法确认火山那边是否已建任务，禁止自动重试；管理员先到火山 LAS 控制台核对，确认没有任务后 `POST /admin/visits/{id}/retry?force=true`。
+- 校验不通过的模块不会写入（状态为 `partial_manual`，其他模块照常显示）；全部模块都不通过则标为失败。
+- 录音被判「过短/内容无效」后不再分析；销售可点「重新判定」，直接用已有转写进入分析（不再花转写费）。
+- 成本：转写按录音时长计费；每条录音的分析约 4–7 次模型调用（`REVIEW_MODE=flagged` 时有风险的模块会再复核 1–2 次）。`DAILY_VISIT_LIMIT` 限制每人每天确认识别的条数。
+- 联调建议：先用一段 1–2 分钟的短录音走一遍（确认识别 → 看转写、角色、门店页圆环），再让同事使用。
+
+## 备份
 
 - 数据库：`sudo docker compose exec db sh -c 'mysqldump -udinggo -p"$MYSQL_PASSWORD" dinggo' > backup.sql`（方式 B：`mysqldump -udinggo -p dinggo > backup.sql`）。
 - 录音文件：`data/uploads/` 目录（方式 A、B 相同）。
@@ -270,7 +283,9 @@ curl -X POST http://服务器IP:8000/admin/visits/12/analysis -H "X-Admin-Token:
 | `GET/POST /todos`、`PATCH /todos/:id`、`POST /todos/:id/done`、`/undo` | 待办：新建（可指派下属）、更新目标/达成/进展、完成、撤销 |
 | `GET /assistant/today?storeId=`、`GET /assistant/brief/:storeId` | 今日待办大卡片、进店前简报（规则计算） |
 | `GET/POST /admin/users`、`PATCH /admin/users/:id`、`POST /admin/users/merge`、`POST /admin/visits/:id/analysis` | 管理：人员、合并账号、写入分析结果（需 `X-Admin-Token`） |
-| `POST /chat`、`/practice/*`、`POST /visits/:id/rejudge` | AI 功能，暂返回 501 |
+| `POST /chat`、`/practice/*` | 问答、陪练，暂返回 501 |
+| `POST /visits/:id/retry`、`POST /visits/:id/rejudge` | 处理失败后重新处理；把无效录音人工判为有效并分析 |
+| `POST /admin/visits/:id/retry?force=` | 管理员强制重试（无法确认是否已提交转写时用） |
 
 ## 本地开发与测试
 

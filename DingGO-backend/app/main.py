@@ -1,11 +1,28 @@
+import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
+from .ai import worker
 from .routers import admin, assistant, auth, files, stores, todos, visits
 
-app = FastAPI(title="DingGo 销售助手后端", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # 后台处理线程：配置了 LAS 和大模型密钥才启动；测试里用 AI_WORKER=false 关闭
+    scheduler = None
+    if os.environ.get("AI_WORKER", "true").lower() != "false" and worker.configured():
+        scheduler = worker.Scheduler()
+        scheduler.start()
+    yield
+    if scheduler:
+        scheduler.stop.set()
+
+
+app = FastAPI(title="DingGo 销售助手后端", version="0.1.0", lifespan=lifespan)
 
 
 # 小程序 services/request.js 读取 message 字段展示错误

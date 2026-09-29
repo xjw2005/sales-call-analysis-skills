@@ -52,9 +52,17 @@
       </view>
     </view>
 
+    <!-- 处理失败：可从失败的那一步重新处理 -->
+    <view wx:if="{{visit.status === 'failed'}}" class="card">
+      <empty-state compact title="处理失败" desc="{{failDesc}}">
+        <view wx:if="{{!visit.pipeline.uncertain}}" class="btn-ghost rejudge" bindtap="retry">重新处理</view>
+      </empty-state>
+    </view>
+    <view wx:if="{{visit.status === 'partial_manual' && visit.pipeline.error}}" class="card"><view class="faint">部分模块没有通过校验，未显示：{{visit.pipeline.error}}</view></view>
+
     <!-- 无效录音 -->
     <view wx:if="{{visit.status === 'invalid_short' || visit.status === 'invalid_content'}}" class="card">
-      <empty-state compact title="{{visit.status === 'invalid_short' ? '录音过短' : '内容无效'}}" desc="{{visit.status === 'invalid_short' ? '有效对话不足 120 秒，未进行分析。' : '未识别到有效的销售对话，未进行分析。'}}">
+      <empty-state compact title="{{visit.status === 'invalid_short' ? '录音过短' : '内容无效'}}" desc="{{visit.status === 'invalid_short' ? '有效对话不足 120 秒，未进行分析。' : '未识别到有效的销售对话，未进行分析。'}}{{invalidDesc ? ' ' + invalidDesc : ''}}">
         <view class="btn-ghost rejudge" bindtap="rejudge">重新判定</view>
       </empty-state>
     </view>

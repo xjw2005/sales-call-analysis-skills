@@ -23,6 +23,30 @@ class Settings(BaseSettings):
     public_base_url: str = "http://localhost:8000"
     file_url_expire_seconds: int = 3600
 
+    # 大模型（OpenAI 兼容接口，如火山方舟）；密钥只放服务器 .env
+    llm_api_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = "deepseek-v4-pro"
+    llm_temperature: float = 0.1
+    role_llm_model: str = ""  # 角色标注和有效性判断用的模型，空则同 llm_model（可填更便宜的 flash 模型）
+    # 分析复核：off | flagged | all；fallback-primary 表示复核不收敛时保留首轮结果
+    review_mode: str = "flagged"
+    review_policy: str = "fallback-primary"
+    # 知识库目录（含 manifest 之外的 .md 条目）；空表示不注入知识
+    knowledge_root: str = "./knowledge/a2"
+    knowledge_enabled: bool = True
+    # 火山 LAS 语音转写；密钥只放服务器 .env
+    las_api_key: str = ""
+    las_region: str = "cn-beijing"
+    las_operator_id: str = "las_asr_seed-2-0-lite"
+    las_operator_version: str = "v1"
+    lasutil_path: str = ""
+    las_poll_seconds: int = 10
+    las_timeout_seconds: int = 3600
+    # 后台处理线程数与每人每日分析次数上限
+    worker_threads: int = 2
+    daily_visit_limit: int = 30
+
     # 识别费用估算：每小时录音多少元
     asr_price_per_hour: float = 1.26
     valid_min_seconds: int = 120

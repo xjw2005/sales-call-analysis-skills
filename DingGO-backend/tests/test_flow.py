@@ -119,7 +119,7 @@ def test_visit_upload_cost_and_status(client, auth):
     assert client.get(url[:-4] + "0000").status_code == 403
     assert client.post(f"/visits/{v['id']}/confirm-cost", headers=auth).json()["status"] == "asr_running"
     assert client.post(f"/visits/{v['id']}/confirm-cost", headers=auth).status_code == 409
-    assert client.post(f"/visits/{v['id']}/rejudge", headers=auth).status_code == 501
+    assert client.post(f"/visits/{v['id']}/rejudge", headers=auth).status_code == 409  # 还没被判无效，不能重新判定
 
 
 def test_visit_without_recording(client, auth):

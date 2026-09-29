@@ -100,4 +100,9 @@ function rejudge(id) {
   return delay(null).then(() => { throw new Error('演示数据：录音不足 120 秒，仍判定为过短'); });
 }
 
-module.exports = { listVisits, getVisit, createVisit, completeUpload, confirmCost, rejudge };
+function retryVisit(id) {
+  if (!config.useMock) return request({ url: `/visits/${id}/retry`, method: 'POST' });
+  return delay(null).then(() => { throw new Error('演示数据没有失败的处理任务'); });
+}
+
+module.exports = { listVisits, getVisit, createVisit, completeUpload, confirmCost, rejudge, retryVisit };

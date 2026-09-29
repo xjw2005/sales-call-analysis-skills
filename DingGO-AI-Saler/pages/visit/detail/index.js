@@ -1,11 +1,13 @@
 const config = require('../../../config/index');
 const fmt = require('../../../utils/format');
 const { STATUS } = require('../../../utils/constants');
-const { getVisit, confirmCost, rejudge } = require('../../../services/visit');
+const { getVisit, confirmCost, rejudge, retryVisit } = require('../../../services/visit');
 
 const TERMINAL = ['done', 'partial_manual', 'invalid_short', 'invalid_content', 'failed', 'cost_pending'];
 const CONCERN_TONE = { 是: 'on', 否: 'off', 证据不足: 'unknown' };
 const CONF_TONE = { 高: 'success', 中: 'info', 低: 'muted' };
+
+const STAGE_TEXT = { asr_submit: '提交语音识别', asr_poll: '语音识别', roles: '整理对话角色', validity: '判断录音是否有效', analysis: 'AI 分析', queued: '排队' };
 
 // 给证据补上显示用的时间戳文本
 const withTs = (list) => (list || []).map((e) => ({ ...e, ts: fmt.timestamp(e.startMs) }));
@@ -20,6 +22,8 @@ Page({
     showTimeline: true,
     a: null,
     grade: '',
+    failDesc: '',
+    invalidDesc: '',
     transcript: [],
     playingUid: '',
   },
@@ -52,6 +56,13 @@ Page({
 
   render(visit) {
     const isFirst = visit.mode === 'first';
+    const pipe = visit.pipeline || {};
+    this.setData({
+      failDesc: pipe.uncertain
+        ? '上次提交语音识别时无法确认是否成功，为避免重复计费，请联系管理员核对后再处理。'
+        : `${STAGE_TEXT[pipe.errorStage] || '处理'}出错：${pipe.error || '未知原因'}`,
+      invalidDesc: pipe.validity && pipe.validity.reason ? `判定理由：${pipe.validity.reason}` : '',
+    });
     const survey = visit.survey || {};
     const patch = {
       visit: {
@@ -126,6 +137,16 @@ Page({
       this.load();
     } catch (err) {
       wx.showModal({ title: '重新判定', content: err.message, showCancel: false });
+    }
+  },
+
+  async retry() {
+    try {
+      const visit = await retryVisit(this.data.id);
+      this.render(visit);
+      this.startPolling();
+    } catch (err) {
+      wx.showModal({ title: '重新处理', content: err.message, showCancel: false });
     }
   },
 
