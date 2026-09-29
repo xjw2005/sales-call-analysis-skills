@@ -215,6 +215,24 @@ Excel 里有真实电话和客户对话，**不要提交到 Git**，只放在服
 - **录音文件**：Excel 里只有文件名，没有音频本身。这些拜访的录音标记为「文件未迁移」，暂时不能播放和识别，需要另外把飞书里的音频下载后放到服务器。
 - **拜访阶段**旧叫法自动转换：陌拜破冰 → 首访破冰，日常拜访 → 日常维护。
 
+## 整改遗留数据
+
+导入报告里的重复门店、没对上门店的待办，用 `scripts/fix_legacy_data.py` 按映射文件整改（默认试运行，`--commit` 才写库；整个文件一个事务，可重复运行）。
+
+```json
+{
+  "merge_stores":    [{"keep": "ST-1005", "drop": "ST-1006"}],
+  "set_external_id": [{"code": "ST-1005", "platform": "智生活", "externalId": "7378"}],
+  "link_todo":       [{"topic": "登康：9月任务拆解", "storeCode": "ST-0123"}]
+}
+```
+
+- `merge_stores`：把 drop 门店的拜访、待办、档案、纠正记录并入 keep 后删除 drop；档案维度两边都有内容时保留 keep 的。
+- `set_external_id`：把平台门店 ID 写回（占用它的门店必须先合并或改掉，否则报错）。
+- `link_todo`：`topic` 是待办里显示的「原门店名：事项」，挂到指定门店后去掉名字前缀，执行人取门店负责人。
+- Docker 里运行：把映射文件复制进容器后 `docker compose exec api python scripts/fix_legacy_data.py --plan /tmp/fix.json`，看结果没问题再加 `--commit`。
+- 整改后不要再重新导入 Excel 的门店和待办部分，否则被合并的门店会按门店编号重新建出来。
+
 ## 登录说明
 
 - `.env` 里 `WX_SECRET` 为空、`DEV_LOGIN=true` 时是**开发登录**：不校验微信身份，方便调试。

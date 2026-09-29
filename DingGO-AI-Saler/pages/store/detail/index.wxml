@@ -63,6 +63,7 @@
         <view wx:for="{{store.legacyActions}}" wx:key="visitId" wx:for-item="la" class="card">
           <view class="faint">{{la.time}} · {{la.stage}}</view>
           <view wx:for="{{la.sections}}" wx:key="title" class="loop-item"><view class="act-topic">{{item.title}}</view><view class="muted loop-now">{{item.text}}</view></view>
+          <view wx:if="{{!la.sections.length}}" class="faint">这次拜访在飞书里没有行动分析记录</view>
         </view>
       </block>
       <view class="section-title small">当前建议行动</view>

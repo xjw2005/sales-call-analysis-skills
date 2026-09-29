@@ -87,8 +87,8 @@ def _legacy_actions(db: Session, visits: list[dict]) -> list[dict]:
         text = (_effective(r) or {}).get("text", "")
         if text.strip():
             by_visit.setdefault(r.visit_id, []).append({"title": "下一步行动" if r.module == "next-action" else "上次行动闭环", "text": text})
-    return [{"visitId": str(vid), "createdAt": legacy[vid]["createdAt"], "stage": legacy[vid]["stage"], "sections": secs}
-            for vid, secs in sorted(by_visit.items(), key=lambda x: -legacy[x[0]]["createdAt"])]
+    return [{"visitId": str(vid), "createdAt": v["createdAt"], "stage": v["stage"], "sections": by_visit.get(vid, [])}
+            for vid, v in sorted(legacy.items(), key=lambda x: -x[1]["createdAt"])]
 
 
 def _slim(store: dict) -> dict:
