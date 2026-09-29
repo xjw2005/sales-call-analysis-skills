@@ -36,6 +36,7 @@ def seeded():
         db.add(StoreProfileSection(store_id=b.id, key="price_profit", state="当前状态", content="怕被打穿"))
         db.add(StoreCorrection(store_id=b.id, text="约80平"))
         db.add(Todo(source="import", topic="登康：9月任务拆解", period="2026-09", target_qty=10))
+        db.add(Todo(source="import", topic="合计", period="2026-09", target_qty=99))
         db.commit()
 
 
@@ -43,6 +44,7 @@ PLAN = {
     "merge_stores": [{"keep": "ST-1", "drop": "ST-2"}],
     "set_external_id": [{"code": "ST-1", "platform": "智生活", "externalId": "7378"}],
     "link_todo": [{"topic": "登康：9月任务拆解", "storeCode": "ST-3"}],
+    "cancel_todo": [{"topic": "合计"}],
 }
 
 
@@ -50,7 +52,7 @@ def test_plan_applies_and_is_idempotent(seeded):
     with SessionLocal() as db:
         log = fix.apply_plan(db, PLAN)
         db.commit()
-        assert len(log) == 3
+        assert len(log) == 4
         keep = db.scalar(select(Store).where(Store.code == "ST-1"))
         assert db.scalar(select(Store).where(Store.code == "ST-2")) is None
         assert db.scalar(select(func.count()).select_from(Visit).where(Visit.store_id == keep.id)) == 2
@@ -59,7 +61,8 @@ def test_plan_applies_and_is_idempotent(seeded):
         assert secs["basic"].content == "夫妻店" and secs["price_profit"].content == "怕被打穿"  # keep 的空维度被补上
         assert keep.contact_phone == "139" and keep.address == "路1号" and keep.cooperation_status == "已合作"
         assert keep.external_id == "7378" and keep.directory_id is not None
-        t = db.scalar(select(Todo))
+        t = db.scalar(select(Todo).where(Todo.period == "2026-09", Todo.target_qty == 10))
+        assert db.scalar(select(Todo.status).where(Todo.topic == "合计")) == "cancelled"
         assert t.store_id == db.scalar(select(Store.id).where(Store.code == "ST-3")) and t.topic == "9月任务拆解" and t.assignee_id is not None
 
         again = fix.apply_plan(db, PLAN)

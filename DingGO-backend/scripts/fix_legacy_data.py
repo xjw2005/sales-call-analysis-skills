@@ -7,10 +7,11 @@
 {
   "merge_stores":    [{"keep": "ST-1005", "drop": "ST-1006"}],
   "set_external_id": [{"code": "ST-1005", "platform": "智生活", "externalId": "7378"}],
-  "link_todo":       [{"topic": "登康：9月任务拆解", "storeCode": "ST-0123", "assigneeId": null}]
+  "link_todo":       [{"topic": "登康：9月任务拆解", "storeCode": "ST-0123", "assigneeId": null}],
+  "cancel_todo":     [{"topic": "合计"}]
 }
 
-- 按 merge_stores → set_external_id → link_todo 的顺序执行；整个文件在一个事务里，任何一步出错都全部回滚。
+- 按 merge_stores → set_external_id → link_todo → cancel_todo 的顺序执行；整个文件在一个事务里，任何一步出错都全部回滚。
 - 可以重复运行：已经做过的步骤会显示「已完成，跳过」。
 - 合并只搬迁 drop 门店名下的拜访、待办、档案、纠正记录；同一档案维度两边都有内容时保留 keep 的。
 - 重要：整改之后不要再重新导入 Excel 的门店和待办部分，否则被合并的门店会按门店编号再建一遍。
@@ -127,6 +128,18 @@ def link_todo(db: Session, topic: str, store_code: str, assignee_id: int | None,
     log.append(f"待办「{topic}」→ {store_code} {st.name}：{len(todos)} 条（执行人 {todos[0].assignee_id or '无'}）")
 
 
+def cancel_todo(db: Session, topic: str, log: list[str]) -> None:
+    """汇总行之类不是真待办的导入待办：标记取消（不删除，页面不再显示）"""
+    todos = list(db.scalars(select(Todo).where(Todo.source == "import", Todo.store_id.is_(None), Todo.topic == topic, Todo.status != "cancelled")))
+    if not todos:
+        log.append(f"取消待办「{topic}」：没有需要取消的，跳过")
+        return
+    for t in todos:
+        t.status = "cancelled"
+    db.flush()
+    log.append(f"取消待办「{topic}」：{len(todos)} 条")
+
+
 def apply_plan(db: Session, plan: dict) -> list[str]:
     log: list[str] = []
     for m in plan.get("merge_stores", []):
@@ -135,6 +148,8 @@ def apply_plan(db: Session, plan: dict) -> list[str]:
         set_external_id(db, e["code"], e["platform"], str(e["externalId"]), log)
     for t in plan.get("link_todo", []):
         link_todo(db, t["topic"], t["storeCode"], t.get("assigneeId"), log)
+    for t in plan.get("cancel_todo", []):
+        cancel_todo(db, t["topic"], log)
     return log
 
 

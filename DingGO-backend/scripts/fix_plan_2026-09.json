@@ -1,0 +1,23 @@
+{
+  "merge_stores": [
+    {"keep": "ST-0206", "drop": "ST-1005"},
+    {"keep": "ST-0206", "drop": "ST-1006"},
+    {"keep": "ST-0017", "drop": "ST-1014"},
+    {"keep": "ST-0959", "drop": "ST-1021"},
+    {"keep": "ST-0736", "drop": "ST-1022"},
+    {"keep": "ST-0414", "drop": "ST-1087"}
+  ],
+  "link_todo": [
+    {"topic": "亲贝比：9月任务拆解", "storeCode": "ST-0206"},
+    {"topic": "爱优母婴生活馆：9月任务拆解", "storeCode": "ST-0959"},
+    {"topic": "倍欢乳业：9月任务拆解", "storeCode": "ST-0177"},
+    {"topic": "童泰：9月任务拆解", "storeCode": "ST-0668"},
+    {"topic": "宜良爱町宝贝：9月任务拆解", "storeCode": "ST-0169"},
+    {"topic": "登康贝比江川店：9月任务拆解", "storeCode": "ST-1047"},
+    {"topic": "禄劝伊亲购：9月任务拆解", "storeCode": "ST-0046"},
+    {"topic": "盘龙区爱町宝贝全球购：9月任务拆解", "storeCode": "ST-0035"}
+  ],
+  "cancel_todo": [
+    {"topic": "合计"}
+  ]
+}
