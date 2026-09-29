@@ -176,12 +176,6 @@
       </view>
       <text class="faint">›</text>
     </view>
-    <view class="drawer-title">我的门店</view>
-    <view wx:for="{{stores}}" wx:key="id" class="drawer-store row" data-id="{{item.id}}" bindtap="pickStore">
-      <view class="pill-avatar small">店</view>
-      <text>{{item.name}}</text>
-      <text wx:if="{{currentStore && currentStore.id === item.id}}" class="tag primary cur">当前</text>
-    </view>
     <view class="drawer-title">对话记录</view>
     <view wx:for="{{histories}}" wx:key="id" class="drawer-chat row between" data-id="{{item.id}}" bindtap="openHistory">
       <text class="dc-title">💬 {{item.title}}</text>

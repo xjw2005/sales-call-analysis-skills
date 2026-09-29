@@ -8,3 +8,12 @@
 .meta { margin-top: 6rpx; }
 .none { text-align: center; padding: 40rpx; }
 .add-bar { position: fixed; left: 40rpx; right: 40rpx; bottom: calc(176rpx + env(safe-area-inset-bottom)); }
+.filter-btn { font-size: 26rpx; color: #5b55e8; padding-left: 20rpx; border-left: 1rpx solid #e6e6f2; white-space: nowrap; }
+.filter-btn.on { font-weight: 600; }
+.filters { margin-bottom: 20rpx; }
+.f-title { font-size: 26rpx; color: #6b6d8f; margin: 12rpx 0 10rpx; }
+.chips { display: flex; flex-wrap: wrap; gap: 14rpx; }
+.chip { padding: 8rpx 24rpx; border-radius: 999rpx; background: #f3f3fa; font-size: 26rpx; color: #1c1b4b; }
+.chip.sel { background: #5b55e8; color: #fff; }
+.f-reset { text-align: right; color: #5b55e8; font-size: 26rpx; margin-top: 16rpx; }
+.count { margin: 0 8rpx 16rpx; }
