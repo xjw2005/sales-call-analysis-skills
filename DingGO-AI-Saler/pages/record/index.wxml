@@ -4,9 +4,7 @@
     <view class="subtitle">录完即自动转写 · 智能分析 · 更新门店档案</view>
 
     <view class="card form">
-      <picker range="{{stores}}" range-key="name" value="{{storeIndex}}" bindchange="onStore">
-        <view class="row between field"><text class="muted">门店</text><text class="val">{{storeIndex >= 0 ? stores[storeIndex].name : '请选择门店'}} ›</text></view>
-      </picker>
+      <view class="row between field" bindtap="onStore"><text class="muted">门店</text><text class="val">{{storeIndex >= 0 ? stores[storeIndex].name : '请选择门店'}} ›</text></view>
       <view wx:if="{{!stores.length}}" class="field"><text class="btn-soft" bindtap="addStore">+ 先添加门店</text></view>
       <picker range="{{stages}}" value="{{stageIndex}}" bindchange="onStage">
         <view class="row between field"><text class="muted">拜访阶段</text><text class="val">{{stages[stageIndex]}} ›</text></view>

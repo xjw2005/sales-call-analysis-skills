@@ -1,0 +1,8 @@
+.page { padding: 24rpx 32rpx 60rpx; }
+.search { background: #fff; border-radius: 999rpx; height: 80rpx; padding: 0 28rpx; margin-bottom: 16rpx; }
+.search-input { flex: 1; margin-left: 12rpx; font-size: 28rpx; }
+.ph { color: #a7aac2; }
+.count { margin: 0 8rpx 12rpx; }
+.item { background: #fff; border-radius: 20rpx; padding: 24rpx 28rpx; margin-bottom: 16rpx; }
+.name { font-size: 30rpx; font-weight: 600; margin-bottom: 6rpx; }
+.none { text-align: center; padding: 40rpx; }

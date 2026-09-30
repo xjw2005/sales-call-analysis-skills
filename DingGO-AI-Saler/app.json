@@ -10,7 +10,8 @@
     "pages/store/edit/index",
     "pages/brief/index",
     "pages/todo/index",
-    "pages/objection/index"
+    "pages/objection/index",
+    "pages/store/pick/index"
   ],
   "window": {
     "navigationBarBackgroundColor": "#F2F3F8",

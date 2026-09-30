@@ -52,8 +52,21 @@ Page({
   },
 
   // ---- 表单 ----
-  onStore(e) {
-    this.setData({ storeIndex: Number(e.detail.value) });
+  onStore() {
+    wx.navigateTo({
+      url: '/pages/store/pick/index',
+      events: {
+        picked: (store) => {
+          let stores = this.data.stores;
+          let idx = stores.findIndex((s) => s.id === store.id);
+          if (idx < 0) {
+            stores = [store, ...stores];
+            idx = 0;
+          }
+          this.setData({ stores, storeIndex: idx });
+        },
+      },
+    });
   },
   onStage(e) {
     const stageIndex = Number(e.detail.value);

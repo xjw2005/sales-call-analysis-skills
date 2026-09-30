@@ -110,10 +110,10 @@ Page({
   switchStore() {
     const { stores } = this.data;
     if (!stores.length) return this.go('/pages/store/edit/index');
-    const shown = stores.slice(0, 6);
-    wx.showActionSheet({
-      itemList: shown.map((s) => s.name),
-      success: ({ tapIndex }) => this.useStore(shown[tapIndex]),
+    // 门店很多（上千家）：用可搜索的选择页，不能用最多 6 项的操作菜单
+    wx.navigateTo({
+      url: '/pages/store/pick/index',
+      events: { picked: (store) => this.useStore(store) },
     });
   },
   useStore(store) {
