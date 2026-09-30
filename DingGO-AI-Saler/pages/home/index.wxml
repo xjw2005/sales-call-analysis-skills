@@ -4,6 +4,7 @@
   <view class="nav container row" style="height:{{navHeight}}px">
     <view class="menu" bindtap="toggleDrawer"><view></view><view></view><view class="short"></view></view>
     <text class="nav-title">助手</text>
+    <view class="new-chat" style="right:{{navRight}}px" bindtap="newChat"><image src="/assets/icons/new-chat.svg" mode="aspectFit" /></view>
   </view>
 
   <scroll-view class="chat" scroll-y scroll-into-view="{{scrollTo}}" scroll-with-animation enhanced show-scrollbar="{{false}}">

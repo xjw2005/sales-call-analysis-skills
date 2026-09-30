@@ -27,6 +27,7 @@ Page({
   data: {
     statusBarHeight: 20,
     navHeight: 44,
+    navRight: 100,
     month: 0,
     day: 0,
     stores: [],
@@ -54,6 +55,7 @@ Page({
     this.setData({
       statusBarHeight: win.statusBarHeight,
       navHeight: (menu.top - win.statusBarHeight) * 2 + menu.height,
+      navRight: win.windowWidth - menu.left + 8,
       month: now.getMonth() + 1,
       day: now.getDate(),
       placeholder: ph,
