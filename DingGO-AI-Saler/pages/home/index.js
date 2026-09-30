@@ -7,6 +7,7 @@ const { listStores } = require('../../services/store');
 const { listTodos, setTodoDone } = require('../../services/todo');
 const { getTodayPanel, markReviewSeen } = require('../../services/assistant');
 const { ask } = require('../../services/chat');
+const plans = require('../../services/plan');
 const practice = require('../../services/practice');
 const { wechatMessage } = require('../../utils/playbook');
 
@@ -35,7 +36,7 @@ Page({
     todayHint: '',
     todayCount: 0,
     chatId: '',
-    // 消息类型：user | ai | todo | practice-intro | customer | result | divider
+    // 消息类型：user | ai | greet | cands | plan | todo | practice-intro | customer | result | divider
     messages: [],
     input: '',
     thinking: false,
@@ -67,6 +68,7 @@ Page({
   onShow() {
     setTab(this, 0);
     this.loadHeader();
+    this.greet();
     // 从简报 / 异议页点「陪练」跳回首页时，直接开始对应场景
     const pending = app.globalData.pendingPractice;
     if (pending) {
@@ -133,6 +135,84 @@ Page({
     return this.data.currentStore ? this.data.currentStore.id : '';
   },
 
+  // ---- 主动问候：每次新对话先看今天有没有真正的待办（计划 / 到期的约定），没有就问今天去哪 ----
+  async greet() {
+    const { chatId, messages, practice } = this.data;
+    if (practice || messages.length || this.greetedChat === chatId) return;
+    this.greetedChat = chatId;
+    try {
+      const g = await plans.greeting();
+      if (this.data.chatId !== chatId || this.data.messages.length) return;
+      this.push({ type: 'greet', greeting: g });
+    } catch (err) {
+      this.greetedChat = '';
+    }
+  },
+  // 点选项：按区 / 最近拜访 / 到期约定 → 给出候选门店卡片
+  async tapOption(e) {
+    const { kind, district, label } = e.currentTarget.dataset;
+    if (this.data.thinking) return;
+    this.push({ type: 'user', text: label });
+    this.setData({ thinking: true });
+    try {
+      const res = await plans.suggest({ kind, district });
+      this.setData({ thinking: false });
+      if (!res.items.length) {
+        this.push({ type: 'ai', text: kind === 'commitments' ? '最近没有到期的约定。' : '没有找到合适的门店，可以换一个区，或直接告诉我想去哪家。', suggestions: [] });
+        return;
+      }
+      this.push({ type: 'cands', cands: { title: res.title, kind, items: res.items.map((it) => ({ ...it, checked: !!it.checked })), done: false } });
+    } catch (err) {
+      this.setData({ thinking: false });
+      this.push({ type: 'ai', text: `出错了：${err.message}`, suggestions: [] });
+    }
+  },
+  toggleCand(e) {
+    const { msg, i } = e.currentTarget.dataset;
+    const m = this.data.messages.find((x) => x.id === msg);
+    if (!m || m.cands.done) return;
+    const items = m.cands.items.map((it, idx) => (idx === Number(i) ? { ...it, checked: !it.checked } : it));
+    this.replace(msg, { cands: { ...m.cands, items } });
+  },
+  async confirmCands(e) {
+    const m = this.data.messages.find((x) => x.id === e.currentTarget.dataset.msg);
+    if (!m || m.cands.done) return;
+    const picked = m.cands.items.filter((it) => it.checked);
+    if (!picked.length) return wx.showToast({ title: '先勾选要去的门店', icon: 'none' });
+    try {
+      const reasons = {};
+      picked.forEach((it) => { reasons[it.storeId] = it.reason; });
+      const plan = await plans.addPlan(picked.map((it) => it.storeId), m.cands.kind, reasons);
+      this.replace(m.id, { cands: { ...m.cands, done: true } });
+      this.push({ type: 'ai', text: `好的，已加入今日计划，共 ${plan.length} 家。到店后点「到店录音」就行。`, suggestions: [] }, { type: 'plan', plan });
+      this.loadHeader();
+    } catch (err) {
+      wx.showToast({ title: err.message, icon: 'none' });
+    }
+    return undefined;
+  },
+  async onPlanAction(e) {
+    const { action, id, store, plan } = e.currentTarget.dataset;
+    if (action === 'brief') {
+      app.setCurrentStore(store);
+      return this.go(`/pages/brief/index?storeId=${store}`);
+    }
+    if (action === 'record') {
+      app.setCurrentStore(store);
+      return this.go(`/pages/record/index?storeId=${store}`);
+    }
+    if (action === 'visit') return this.go(`/pages/visit/detail/index?id=${id}`);
+    if (action === 'remove') {
+      const { confirm } = await new Promise((resolve) => wx.showModal({ title: '移出今日计划', content: '不去这家店了吗？', success: resolve }));
+      if (!confirm) return undefined;
+      await plans.removePlan(id);
+      const fresh = await plans.todayPlan();
+      this.replace(plan, { plan: fresh });
+      this.loadHeader();
+    }
+    return undefined;
+  },
+
   // ---- 选项一：今日待办 ----
   async openToday() {
     const panel = await getTodayPanel(this.storeId());
@@ -162,6 +242,10 @@ Page({
       return this.go(`/pages/visit/detail/index?id=${id}`);
     }
     if (action === 'openBrief') return this.go(`/pages/brief/index?storeId=${id}`);
+    if (action === 'recordStore') {
+      app.setCurrentStore(id);
+      return this.go(`/pages/record/index?storeId=${id}`);
+    }
     if (action === 'allTodos') return this.go('/pages/todo/index');
     if (action === 'record') return this.startRecord();
     return undefined;
@@ -248,6 +332,7 @@ Page({
   newChat() {
     if (this.data.practice) this.setData({ practice: null, placeholder: this.data.defaultPlaceholder });
     this.setData({ chatId: `c${Date.now()}`, messages: [], input: '', scrollTo: '' });
+    this.greet();
   },
 
   // ---- 录音 ----

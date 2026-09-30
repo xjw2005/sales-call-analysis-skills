@@ -72,6 +72,15 @@ def apply_analysis(db: Session, visit: Visit, analysis: dict, transcript: list |
     db.execute(delete(Todo).where(Todo.visit_id == visit.id, Todo.source == "ai", Todo.status == "open"))
     base = local_date(visit.entered_at)
     store = db.get(Store, visit.store_id)
+    # 录音里已确认的约定（「过两天带空罐来」「老板不在，周五再来」）：销售、客户、双方的都记成待办，到期就会提醒
+    for a in (analysis.get("nextAction") or {}).get("confirmedActions", []):
+        db.add(Todo(
+            source="ai", visit_id=visit.id, store_id=visit.store_id,
+            assignee_id=visit.visitor_id or (store.primary_sales_id if store else None),
+            topic=a.get("action", "")[:60], action=a.get("action", ""), owner=a.get("owner", "销售"),
+            timeframe=a.get("timeframe", ""), reason="录音中已确认的约定",
+            due_date=due_or_default(a.get("timeframe", ""), base, None),
+        ))
     for a in (analysis.get("nextAction") or {}).get("actions", []):
         db.add(Todo(
             source="ai", visit_id=visit.id, store_id=visit.store_id,

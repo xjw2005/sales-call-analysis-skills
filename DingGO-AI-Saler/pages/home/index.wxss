@@ -116,3 +116,12 @@
 .cur { margin-left: auto; }
 .drawer-chat { padding: 18rpx 0; font-size: 28rpx; }
 .dc-title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; margin-right: 16rpx; }
+
+/* 今日计划 / 候选门店 */
+.plan-panel { margin-top: 16rpx; }
+.cands .cand { align-items: flex-start; gap: 20rpx; padding: 16rpx 0; }
+.check { flex-shrink: 0; width: 40rpx; height: 40rpx; border-radius: 12rpx; border: 2rpx solid #cfcdfa; text-align: center; line-height: 36rpx; font-size: 26rpx; color: #fff; margin-top: 4rpx; box-sizing: border-box; }
+.check.on { background: #5b55e8; border-color: #5b55e8; }
+.cand-addr { font-size: 22rpx; margin-top: 2rpx; }
+.prow-col { display: flex; flex-direction: column; gap: 12rpx; align-items: flex-end; }
+.prow-btn.solid { background: #5b55e8; color: #fff; border-color: #5b55e8; }

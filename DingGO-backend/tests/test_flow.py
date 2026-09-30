@@ -156,15 +156,13 @@ def test_import_analysis_builds_profile_todos_and_panel(client, auth):
 
     panel = client.get(f"/assistant/today?storeId={s['id']}", headers=auth).json()
     titles = [x["title"] for x in panel["sections"]]
-    assert "拜访复盘" in titles and "进店前" in titles
-    review = next(x for x in panel["sections"] if x["title"] == "拜访复盘")["rows"][0]
-    assert review["badge"] == "71分 B" and "问题影响与经济意义" in review["sub"]
+    # 今日待办只放：今日计划、到期的约定、待确认费用；复盘/简报/久未拜访不在这里
+    assert titles == ["到期的约定和跟进"] and panel["steps"] is None
+    assert panel["sections"][0]["rows"][0]["text"].endswith("补齐控价证据")
 
     detail = client.get(f"/visits/{v['id']}", headers=auth).json()
     assert detail["status"] == "done" and detail["moduleDone"] == 7
     assert detail["analysis"]["effectiveness"]["total"] == 71 and detail["transcript"][0]["uid"] == "U0001"
-    panel = client.get(f"/assistant/today?storeId={s['id']}", headers=auth).json()
-    assert "拜访复盘" not in [x["title"] for x in panel["sections"]]
 
     store = client.get(f"/stores/{s['id']}", headers=auth).json()
     assert store["oneLine"] == "社区母婴店，担心线上比价。"
@@ -188,7 +186,7 @@ def test_first_visit_brief_and_empty_panel(client, auth):
     brief = client.get(f"/assistant/brief/{s['id']}", headers=auth).json()
     assert brief["isFirst"] is True and brief["opening"] and len(brief["questions"]) == 3
     panel = client.get("/assistant/today", headers=auth).json()
-    assert panel["count"] == 0 and panel["hint"] == "今天暂无到期的跟进事项"
+    assert panel["count"] == 0 and panel["hint"] == "今天还没有计划，新建对话告诉我要去哪"
 
 
 def test_first_visit_marks_store_cooperated(client, auth):

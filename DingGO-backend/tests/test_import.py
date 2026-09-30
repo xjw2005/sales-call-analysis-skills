@@ -252,9 +252,8 @@ def test_imported_data_visible_through_api(client, xlsx):
     assert brief["isFirst"] is False and any("补全「经营模式」" in q for q in brief["questions"])  # 用导入的档案生成要问的问题
     todos = client.get("/todos", headers=h).json()
     assert [t["gapQty"] for t in todos if t["storeName"] == "宝贝乐母婴店"] == [24.0]
-    # 今日待办里，目标类待办显示进度
+    # 月度目标类的导入待办不算「到期的约定」，不进今日待办（在「我的待办」里看进度）
     panel = client.get(f"/assistant/today?storeId={by_code['ST-0001']['id']}", headers=h).json()
-    rows = [r for sec in panel["sections"] if sec["title"] == "跟进事项" for r in sec["rows"]]
-    assert any("目标 60，已达成 36，差 24" in r["sub"] for r in rows)
+    assert not [r for sec in panel["sections"] if sec["title"] == "到期的约定和跟进" for r in sec["rows"]]
     # 没迁移录音的历史拜访不能确认识别，不能出现在「待处理录音」里
     assert not [r for sec in panel["sections"] if sec["title"] == "待处理录音" for r in sec["rows"] if r["key"].startswith("cost-")]

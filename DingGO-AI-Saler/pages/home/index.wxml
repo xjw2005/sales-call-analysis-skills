@@ -50,6 +50,71 @@
           </view>
         </view>
 
+        <!-- 新对话的主动问候：今日计划 / 到期约定 / 问今天去哪 -->
+        <view wx:elif="{{msg.type === 'greet'}}" class="msg ai">
+          <view class="bubble"><text user-select>{{msg.greeting.text}}</text></view>
+          <view wx:if="{{msg.greeting.plan.length}}" class="panel plan-panel">
+            <view class="panel-body">
+              <view class="sec-title">今日计划</view>
+              <view wx:for="{{msg.greeting.plan}}" wx:key="id" wx:for-item="p" class="prow">
+                <view class="prow-main row">
+                  <text class="tag {{p.status === 'visited' ? 'success' : 'info'}} prow-tag">{{p.status === 'visited' ? '已去' : '待去'}}</text>
+                  <view class="prow-text"><view class="prow-title">{{p.name}}</view><view class="prow-sub">{{p.reason || p.district}}</view></view>
+                  <view wx:if="{{p.status === 'visited'}}" class="prow-btn" data-action="visit" data-id="{{p.visitId}}" bindtap="onPlanAction">看拜访</view>
+                  <view wx:else class="prow-btn" data-action="record" data-store="{{p.storeId}}" bindtap="onPlanAction">到店录音</view>
+                </view>
+              </view>
+            </view>
+          </view>
+          <view class="chips">
+            <view wx:for="{{msg.greeting.options}}" wx:key="label" wx:for-item="o" class="chip" data-kind="{{o.kind}}" data-district="{{o.district}}" data-label="{{o.label}}" bindtap="tapOption">{{o.label}}</view>
+          </view>
+        </view>
+
+        <!-- 候选门店：勾选后确定今日计划 -->
+        <view wx:elif="{{msg.type === 'cands'}}" class="msg ai">
+          <view class="panel">
+            <view class="panel-body cands">
+              <view class="sec-title">{{msg.cands.title}}</view>
+              <view wx:for="{{msg.cands.items}}" wx:key="storeId" wx:for-item="c" wx:for-index="ci" class="cand row" data-msg="{{msg.id}}" data-i="{{ci}}" bindtap="toggleCand">
+                <view class="check {{c.checked ? 'on' : ''}}">{{c.checked ? '✓' : ''}}</view>
+                <view class="prow-text">
+                  <view class="prow-title">{{c.name}}</view>
+                  <view class="prow-sub">{{c.reason}}</view>
+                  <view wx:if="{{c.district || c.address}}" class="faint cand-addr">{{c.district}} {{c.address}}</view>
+                </view>
+              </view>
+              <view class="panel-btns row">
+                <view wx:if="{{msg.cands.done}}" class="pb">已加入今日计划</view>
+                <view wx:else class="pb primary" data-msg="{{msg.id}}" bindtap="confirmCands">确定今日计划</view>
+              </view>
+            </view>
+          </view>
+        </view>
+
+        <!-- 今日计划卡片 -->
+        <view wx:elif="{{msg.type === 'plan'}}" class="msg ai">
+          <view class="panel">
+            <view class="panel-body">
+              <view class="sec-title">今日计划</view>
+              <view wx:for="{{msg.plan}}" wx:key="id" wx:for-item="p" class="prow">
+                <view class="prow-main row">
+                  <text class="tag {{p.status === 'visited' ? 'success' : 'info'}} prow-tag">{{p.status === 'visited' ? '已去' : '待去'}}</text>
+                  <view class="prow-text">
+                    <view class="prow-title">{{p.name}}</view>
+                    <view class="prow-sub">{{p.reason || p.district}}</view>
+                    <view wx:if="{{p.status !== 'visited'}}" class="prow-link" data-action="remove" data-id="{{p.id}}" data-plan="{{msg.id}}" bindtap="onPlanAction">移出计划</view>
+                  </view>
+                  <view class="prow-col">
+                    <view class="prow-btn" data-action="brief" data-store="{{p.storeId}}" bindtap="onPlanAction">简报</view>
+                    <view wx:if="{{p.status !== 'visited'}}" class="prow-btn solid" data-action="record" data-store="{{p.storeId}}" bindtap="onPlanAction">到店录音</view>
+                  </view>
+                </view>
+              </view>
+            </view>
+          </view>
+        </view>
+
         <!-- 今日待办大卡片 -->
         <view wx:elif="{{msg.type === 'todo'}}" class="msg ai">
           <view class="panel">
@@ -57,7 +122,7 @@
               <view class="ph-icon" style="background:#3d7cf5">办</view>
               <view class="ph-body">
                 <view class="ph-title">今日待办</view>
-                <view class="ph-steps">
+                <view wx:if="{{msg.panel.steps}}" class="ph-steps">
                   <text wx:for="{{msg.panel.steps.labels}}" wx:key="*this" wx:for-item="l" wx:for-index="i" class="ps {{i < msg.panel.steps.current ? 'done' : i === msg.panel.steps.current ? 'now' : ''}}">{{i < msg.panel.steps.current ? '✓' : i + 1}} {{l}}</text>
                 </view>
               </view>
@@ -78,7 +143,7 @@
                   </view>
                 </view>
               </view>
-              <view wx:if="{{!msg.panel.sections.length}}" class="faint empty-tip">今天没有要处理的事 🎉</view>
+              <view wx:if="{{!msg.panel.sections.length}}" class="faint empty-tip">今天还没有待办，新建对话告诉我要去哪</view>
               <view class="panel-btns row">
                 <view class="pb" data-action="allTodos" data-msg="{{msg.id}}" bindtap="onRowAction">查看全部待办</view>
                 <view class="pb primary" data-action="record" data-msg="{{msg.id}}" bindtap="onRowAction">开始拜访录音</view>

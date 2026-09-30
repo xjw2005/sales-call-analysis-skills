@@ -95,6 +95,7 @@ def build_analysis(selected: dict[str, dict[str, Any]], tr: Transcript, mode: st
             out["nextAction"] = {
                 "judgement": v["action_judgment"], "reason": v["judgment_reason"],
                 "confirmed": [_action_line(a) for a in v["confirmed_actions"]],
+                "confirmedActions": [{k: a[k] for k in ("owner", "timeframe", "action")} for a in v["confirmed_actions"]],  # 录音里已确认的约定，会生成待办
                 "actions": [{k: a[k] for k in ("topic", "owner", "timeframe", "action", "reason", "acceptance")} | {"evidence": ev.items(a["evidence_ids"])}
                             for a in v["recommended_actions"]],
                 "revisitValue": "" if second["value"] == "不适用" else f"{second['value']}：{second['reason']}",

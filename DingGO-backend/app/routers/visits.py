@@ -11,6 +11,7 @@ from ..db import get_db
 from ..deps import current_user
 from ..models import CorrectionEvent, User, Visit, VisitAnalysis, VisitSegment, VisitTranscript, utcnow
 from ..ai import worker
+from ..services import plans as plan_service
 from ..services import storage
 from ..services.access import actionable_visit, visible_store, visible_visit
 from ..services.audio import duration_ms
@@ -107,6 +108,8 @@ def create_visit(body: VisitIn, db: Session = Depends(get_db), user: User = Depe
     if body.checkin:
         v.checkin_address, v.checkin_lat, v.checkin_lng = body.checkin.address, body.checkin.lat, body.checkin.lng
     db.add(v)
+    db.flush()
+    plan_service.mark_visited(db, v)  # 今日计划里的这家店标为已去
     db.commit()
     out = serialize_visit(db, v)
     if v.status == "uploading":

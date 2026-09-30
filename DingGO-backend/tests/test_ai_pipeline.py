@@ -139,7 +139,9 @@ def test_full_pipeline(client, auth, ai):
     assert len(detail["transcript"]) == 16 and detail["transcript"][0]["uid"] == "U0001" and detail["transcript"][1]["role"] == "客户"
     assert detail["pipeline"]["stage"] == "done" and detail["pipeline"]["validity"]["value"] == "有效"
     with SessionLocal() as db:
-        assert db.scalar(select(Todo).where(Todo.visit_id == int(v["id"]), Todo.source == "ai")).topic == "补齐价格证据"
+        topics = {t.topic: t for t in db.scalars(select(Todo).where(Todo.visit_id == int(v["id"]), Todo.source == "ai"))}
+        assert set(topics) == {"补齐价格证据", "把价格表和退货政策发给客户"}  # 建议行动 + 录音里已确认的约定
+        assert topics["把价格表和退货政策发给客户"].reason == "录音中已确认的约定" and topics["把价格表和退货政策发给客户"].owner == "销售"
         assert db.scalar(select(StoreProfileSection).where(StoreProfileSection.key == "price_profit")).state == "当前状态"
         assert db.scalars(select(VisitAnalysis.model).where(VisitAnalysis.module == "concerns")).first() != ""
         assert db.get(Visit, int(v["id"])).cooperated == "否"

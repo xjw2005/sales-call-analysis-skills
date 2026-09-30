@@ -160,6 +160,22 @@ SQL
 - 成本：转写按录音时长计费；每条录音的分析约 4–7 次模型调用（`REVIEW_MODE=flagged` 时有风险的模块会再复核 1–2 次）。`DAILY_VISIT_LIMIT` 限制每人每天确认识别的条数。
 - 联调建议：先用一段 1–2 分钟的短录音走一遍（确认识别 → 看转写、角色、门店页圆环），再让同事使用。
 
+## 今日计划（先决定去哪几家店，再到店录音）
+
+销售一般先决定今天去哪几家店（常按片区集中跑），到店后录音。首页每次**新建对话**时，助手先检查今天有没有真正的待办：
+- 有今日计划：报计划和进度（已去几家），可直接「到店录音」；
+- 没有计划但有到期的约定（例如录音里说「过两天带空罐来」）：先提醒，问要不要安排进今天；
+- 都没有：问「今天准备去哪个区的门店？」，给出「我常跑的区」「最近拜访过的店」「我承诺过的事」等选项。
+点选后给出候选门店（带理由：约定到期、N 天没去、从未拜访……），勾选后「确定今日计划」写入 `visit_plans`；创建拜访时自动把对应计划标为已去。
+
+- 「今日待办」= 今日计划 + 到期的约定 + 待确认费用的录音；简报、久未拜访等不再放进待办。
+- AI 分析出的「已确认后续事项」（销售、客户、双方的）也会生成待办，按时限文字解析到期日。
+- 接口：`GET /plans/greeting`、`GET /plans/suggest?kind=district|recent|commitments&district=`、`GET /plans/today`、`POST /plans`、`DELETE /plans/{id}`。
+- 按片区依赖门店的区县：门店表里区县多数为空，用 `scripts/backfill_district.py` 补（先总门店清单，再从地址解析；默认试运行，`--commit` 写库；补不了的会列出名称）。
+  Docker 里：`docker compose exec api python scripts/backfill_district.py`，看结果没问题再加 `--commit`。
+- 迁移 `0003_visit_plans` 在容器启动时自动执行。
+- 之后的阶段：销量缺口（历史平均 vs 本月）、大模型对话选店、地图路线（依赖门店坐标）。
+
 ## 备份
 
 - 数据库：`sudo docker compose exec db sh -c 'mysqldump -udinggo -p"$MYSQL_PASSWORD" dinggo' > backup.sql`（方式 B：`mysqldump -udinggo -p dinggo > backup.sql`）。

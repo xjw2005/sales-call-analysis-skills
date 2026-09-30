@@ -1,119 +1,70 @@
 """首页「今日待办」大卡片与进店前简报（纯规则，与小程序 services/assistant.js 一致）"""
 
-import time
-
 from sqlalchemy.orm import Session
 
-from ..config import get_settings
 from ..models import Store, User
-from .constants import ANALYZED, PROCESSING
-from .playbook import DIM_TIPS, GENERAL_QUESTIONS, OBJECTION_FOCUS, OBJECTIONS, PROFILE_QUESTIONS, grade, weakest_dim
-from .summary import list_stores, list_todos, list_visits, summarize_store
+from . import plans
+from .constants import ANALYZED
+from .playbook import GENERAL_QUESTIONS, OBJECTION_FOCUS, OBJECTIONS, PROFILE_QUESTIONS
+from .summary import list_todos, list_visits, summarize_store
 from .timeutil import fmt_date, fmt_duration
 
-DAY_MS = 24 * 3600 * 1000
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
-def _stores(db: Session, user: User) -> list[dict]:
-    return list_stores(db, user)
-
-
-def compute_steps(store: dict | None, visits: list[dict], todos: list[dict]) -> dict:
-    labels = ["进店前看简报", "进店中录音", "离店后看复盘", "按待办跟进"]
-    current, hint = 0, (f"今天去 {store['name']}？先看一眼简报" if store else "先添加一家门店")
-    if store:
-        today_key = fmt_date(_now_ms()).split(" ")[0]
-        v = next((x for x in visits if x["storeId"] == store["id"] and fmt_date(x["createdAt"]).split(" ")[0] == today_key), None)
-        if v and ((v["status"] == "cost_pending" and not v["legacy"]) or v["status"] in PROCESSING):
-            current = 2
-            hint = "录音已上传，确认费用后开始分析" if v["status"] == "cost_pending" else "录音分析中，好了会出现在下方"
-        elif v and v["status"] in ANALYZED:
-            open_ = [t for t in todos if t["storeId"] == store["id"] and not t["done"]]
-            current = 3 if open_ else 4
-            hint = f"还有 {len(open_)} 件跟进事项" if open_ else "今天这家店的工作都完成了"
-    return {"labels": labels, "current": current, "hint": hint}
-
-
 def today_panel(db: Session, user: User, store_id: str | None) -> dict:
-    visits = list_visits(db, user)  # 我和下属拜访的
+    """「今日待办」= 今日计划（要去的店）+ 到期的约定 + 等你确认费用的录音。
+    进店前简报、久未拜访之类的建议不放在这里，由新对话的主动问候和对话里的选项提供"""
+    plan = plans.today_items(db, user)
     todos = list_todos(db, user)
-    stores = _stores(db, user)
-    store = next((s for s in stores if s["id"] == store_id), stores[0] if stores else None)
-    now = _now_ms()
-    stale_ms = get_settings().stale_days * DAY_MS
+    visits = list_visits(db, user)
     sections = []
 
-    open_ = [t for t in todos if not t["done"]]
-    due = [t for t in open_ if t["due"]["days"] <= 0]
+    rows = []
+    for p in plan:
+        visited = p["status"] == "visited"
+        rows.append({
+            "key": f"plan-{p['id']}", "badge": "已去" if visited else "待去", "tone": "success" if visited else "info",
+            "text": p["name"], "sub": p["reason"] or p["district"] or p["address"],
+            "btn": "看拜访" if visited else "看简报", "action": "openVisit" if visited else "openBrief",
+            "id": p["visitId"] if visited else p["storeId"],
+            **({} if visited else {"subBtn": "到店录音", "subAction": "recordStore"}),
+        })
+    if rows:
+        sections.append({"title": "今日计划", "rows": rows})
+
+    due = [t for t in todos if not t["done"] and t["source"] != "import" and t["targetQty"] is None
+           and t["dueAt"] is not None and t["due"]["days"] <= plans.DUE_SOON_DAYS]
     follow = [{
         "key": f"todo-{t['id']}", "badge": t["due"]["text"], "tone": t["due"]["tone"],
-        "text": f"{t['storeName']} · {t['topic']}",
-        "sub": t["action"] or (f"目标 {t['targetQty']:g}，已达成 {(t['achievedQty'] or 0):g}，差 {t['gapQty']:g}" if t["gapQty"] is not None else ""),
+        "text": f"{t['storeName']} · {t['topic']}", "sub": t["action"] or t["reason"],
         "btn": "完成", "action": "todoDone", "id": t["id"], "subBtn": "复制微信话术", "subAction": "copyMsg",
-    } for t in (due or open_[:1])]
+    } for t in due]
     if follow:
-        sections.append({"title": "跟进事项", "rows": follow})
+        sections.append({"title": "到期的约定和跟进", "rows": follow})
 
     rec = [{
         "key": f"cost-{v['id']}", "badge": "待确认", "tone": "warn",
         "text": f"{v['storeName']} · 录音 {fmt_duration(v['durationSec'])}", "sub": f"预估识别费 ¥{v['estCost']}，确认后自动分析",
         "btn": "去确认", "action": "openVisit", "id": v["id"],
-    } for v in visits if v["status"] == "cost_pending" and not v["legacy"]]  # 飞书导入的历史录音文件还没迁移，不能确认识别，不放进待办
-    rec += [{
-        "key": f"short-{v['id']}", "badge": "过短", "tone": "muted",
-        "text": f"{v['storeName']} · 录音不足 2 分钟", "sub": "下次多问开放式问题，让老板多说",
-        "btn": "看怎么问", "action": "openBrief", "id": v["storeId"],
-    } for v in visits if v["status"] == "invalid_short" and now - v["createdAt"] < 7 * DAY_MS]
+    } for v in visits if v["status"] == "cost_pending" and not v["legacy"]]  # 飞书导入的历史录音文件还没迁移，不能确认识别
     if rec:
         sections.append({"title": "待处理录音", "rows": rec})
 
-    review = []
-    for v in visits:
-        if v["status"] not in ANALYZED or v["legacy"] or now - v["createdAt"] >= 3 * DAY_MS or v["reviewed"]:
-            continue
-        eff = v["analysis"].get("effectiveness")
-        weak = weakest_dim(eff)
-        tip = DIM_TIPS.get(weak["name"]) if weak else None
-        topics = "、".join(a.get("topic", "") for a in v["analysis"]["nextAction"].get("actions", [])) or "无需新增行动"
-        review.append({
-            "key": f"review-{v['id']}", "badge": f"{eff['total']}分 {grade(eff['total'])}" if eff else "已分析", "tone": "primary",
-            "text": f"{v['storeName']} · {v['stage']}",
-            "sub": f"最该改：{weak['name']}。{tip}" if tip else f"下一步：{topics}",
-            "btn": "看详情", "action": "openVisit", "id": v["id"],
-        })
-    if review:
-        sections.append({"title": "拜访复盘", "rows": review})
-
-    if store:
-        profile = store["profile"]
-        unconfirmed = sum(1 for x in profile["sections"] if x["state"] == "未确认") if profile else 0
-        sections.append({"title": "进店前", "rows": [{
-            "key": f"brief-{store['id']}", "badge": "简报", "tone": "info", "text": store["name"],
-            "sub": (store["oneLine"] + (f"（{unconfirmed} 项情况待摸清）" if unconfirmed else "")) if profile else "第一次拜访，已备好开场白和要问的问题",
-            "btn": "看简报", "action": "openBrief", "id": store["id"],
-        }]})
-
-    stale = [{
-        "key": f"stale-{s['id']}", "badge": f"{(now - s['lastVisitAt']) // DAY_MS}天未访", "tone": "muted",
-        "text": s["name"], "sub": f"上次卡在：{s['actions'][0].get('topic', '')}" if s["actions"] else "去看看最近情况",
-        "btn": "看简报", "action": "openBrief", "id": s["id"],
-    } for s in sorted((x for x in stores if x["lastVisitAt"] and now - x["lastVisitAt"] > stale_ms), key=lambda x: x["lastVisitAt"])[:3]]
-    if stale:
-        sections.append({"title": "久未拜访", "rows": stale})
-
+    pending = sum(1 for p in plan if p["status"] == "planned")
+    count = pending + len(follow) + len(rec)
     overdue = sum(1 for t in due if t["due"]["days"] < 0)
-    stuck_name = due[0]["storeName"] if due else (stale[0]["text"] if stale else "")
+    parts = []
+    if plan:
+        parts.append(f"计划 {len(plan)} 家，已去 {len(plan) - pending} 家")
+    if follow:
+        parts.append(f"{len(follow)} 件约定" + (f"（{overdue} 件逾期）" if overdue else ""))
+    if rec:
+        parts.append(f"{len(rec)} 条录音待确认")
     return {
-        "count": len(due),
-        "hint": f"今天有 {len(due)} 件事要跟进" + (f"，{overdue} 件已逾期" if overdue else "") if due else "今天暂无到期的跟进事项",
-        "stat": f"{len(due)} 件跟进" + (f" · {overdue} 件逾期" if overdue else ""),
-        "steps": compute_steps(store, visits, todos),
+        "count": count,
+        "hint": "，".join(parts) if parts else "今天还没有计划，新建对话告诉我要去哪",
+        "stat": f"{count} 件待办" if count else "暂无待办",
+        "steps": None,
         "sections": sections,
-        "suggestions": ["客户说网上更便宜怎么回？", f"{stuck_name}上次卡在哪？" if stuck_name else "下一步该做什么？", "这家店最关心什么？"],
+        "suggestions": ["客户说网上更便宜怎么回？", follow[0]["text"].split(" · ")[0] + "上次卡在哪？" if follow else "下一步该做什么？", "这家店最关心什么？"],
     }
 
 

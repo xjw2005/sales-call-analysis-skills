@@ -188,6 +188,24 @@ class VisitTranscript(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class VisitPlan(Base):
+    """今日计划：销售确定今天要去的门店。拜访创建后自动标为已去；到承诺日期的事项也可以加入计划"""
+
+    __tablename__ = "visit_plans"
+    __table_args__ = (UniqueConstraint("user_id", "plan_date", "store_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    plan_date: Mapped[date] = mapped_column(Date, index=True)
+    store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
+    source: Mapped[str] = mapped_column(String(16), default="manual")  # district | recent | commitment | sales | manual
+    reason: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(16), default="planned")  # planned | visited
+    visit_id: Mapped[int | None] = mapped_column(ForeignKey("visits.id"), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class VisitPipeline(Base):
     """AI 处理进度（每条有录音的拜访一行）：断点续跑、防重复提交转写。
     stage：queued | asr_submit | asr_poll | roles | validity | analysis | done | failed"""
