@@ -256,3 +256,5 @@ def test_imported_data_visible_through_api(client, xlsx):
     panel = client.get(f"/assistant/today?storeId={by_code['ST-0001']['id']}", headers=h).json()
     rows = [r for sec in panel["sections"] if sec["title"] == "跟进事项" for r in sec["rows"]]
     assert any("目标 60，已达成 36，差 24" in r["sub"] for r in rows)
+    # 没迁移录音的历史拜访不能确认识别，不能出现在「待处理录音」里
+    assert not [r for sec in panel["sections"] if sec["title"] == "待处理录音" for r in sec["rows"] if r["key"].startswith("cost-")]

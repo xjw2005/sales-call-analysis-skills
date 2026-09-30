@@ -28,7 +28,7 @@ def compute_steps(store: dict | None, visits: list[dict], todos: list[dict]) -> 
     if store:
         today_key = fmt_date(_now_ms()).split(" ")[0]
         v = next((x for x in visits if x["storeId"] == store["id"] and fmt_date(x["createdAt"]).split(" ")[0] == today_key), None)
-        if v and (v["status"] == "cost_pending" or v["status"] in PROCESSING):
+        if v and ((v["status"] == "cost_pending" and not v["legacy"]) or v["status"] in PROCESSING):
             current = 2
             hint = "录音已上传，确认费用后开始分析" if v["status"] == "cost_pending" else "录音分析中，好了会出现在下方"
         elif v and v["status"] in ANALYZED:
@@ -62,7 +62,7 @@ def today_panel(db: Session, user: User, store_id: str | None) -> dict:
         "key": f"cost-{v['id']}", "badge": "待确认", "tone": "warn",
         "text": f"{v['storeName']} · 录音 {fmt_duration(v['durationSec'])}", "sub": f"预估识别费 ¥{v['estCost']}，确认后自动分析",
         "btn": "去确认", "action": "openVisit", "id": v["id"],
-    } for v in visits if v["status"] == "cost_pending"]
+    } for v in visits if v["status"] == "cost_pending" and not v["legacy"]]  # 飞书导入的历史录音文件还没迁移，不能确认识别，不放进待办
     rec += [{
         "key": f"short-{v['id']}", "badge": "过短", "tone": "muted",
         "text": f"{v['storeName']} · 录音不足 2 分钟", "sub": "下次多问开放式问题，让老板多说",

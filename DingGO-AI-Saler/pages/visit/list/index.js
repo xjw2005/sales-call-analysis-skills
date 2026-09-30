@@ -3,7 +3,7 @@ const { listVisits } = require('../../../services/visit');
 
 const FILTERS = [
   { text: '全部', match: () => true },
-  { text: '待确认', match: (v) => v.status === 'cost_pending' },
+  { text: '待确认', match: (v) => v.status === 'cost_pending' && !v.legacy },
   { text: '处理中', match: (v) => ['uploading', 'asr_running', 'role_classifying', 'analyzing', 'reviewing'].includes(v.status) },
   { text: '已完成', match: (v) => ['done', 'partial_manual'].includes(v.status) },
   { text: '无效', match: (v) => ['invalid_short', 'invalid_content', 'failed'].includes(v.status) },
