@@ -4,6 +4,7 @@
 - 销售勾选后写入 visit_plans；创建拜访时自动把对应的计划标为「已去」。
 """
 
+from collections import Counter
 from datetime import date, timedelta
 
 from sqlalchemy import func, or_, select
@@ -80,6 +81,62 @@ def _cand(row, reason: str, tags: list[str], last_days: int | None, checked: boo
     }
 
 
+# ---------------------------------------------------------------- 销量缺口
+
+SALES_BASE_MONTHS = 3      # 用前几个月的平均作为「平时水平」
+SALES_MIN_BASELINE = 2     # 平时水平低于这个数的店不提醒（销量本来就很小，没有冲刺意义）
+SALES_LOW_RATIO = 0.7      # 本期销量低于平时水平的 70% 算偏低
+SALES_MIN_COVERAGE = 0.2   # 至少这么多比例的门店有该月数据，才认为该月的销量数据已经更新
+
+
+def _num(v) -> float | None:
+    try:
+        return None if v is None or v == "" else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def sales_gaps(db: Session, user: User) -> dict:
+    """每家店「本期销量 vs 平时水平」。销量来自总门店清单里的按月销量（store_directory.monthly_sales）。
+
+    「本期」取销量数据里最新的、且已有足够多门店填了数据的月份（不晚于当月）：
+    数据没更新到当月时不会把所有店都当成 0 销量误报，而是拿最近一个有数据的月份对比。
+    返回 {"refMonth": "2026-09" | None, "items": {store_id: {current, avg, gap, ratio}}}
+    """
+    rows = db.execute(
+        select(Store.id, StoreDirectory.monthly_sales).join(StoreDirectory, Store.directory_id == StoreDirectory.id)
+        .where(store_filter(team_ids(db, user)), StoreDirectory.monthly_sales.is_not(None))
+    ).all()
+    data = {sid: {m: n for m, v in (ms or {}).items() if (n := _num(v)) is not None} for sid, ms in rows if isinstance(ms, dict)}
+    data = {sid: ms for sid, ms in data.items() if ms}
+    if not data:
+        return {"refMonth": None, "items": {}}
+    this_month = f"{today().year}-{today().month:02d}"
+    counts = Counter(m for ms in data.values() for m in ms if m <= this_month)
+    need = max(3, int(len(data) * SALES_MIN_COVERAGE))
+    ready = sorted(m for m, c in counts.items() if c >= need)
+    if not ready:
+        return {"refMonth": None, "items": {}}
+    ref = ready[-1]
+    items = {}
+    for sid, ms in data.items():
+        prior = [ms[m] for m in sorted(k for k in ms if k < ref)][-SALES_BASE_MONTHS:]
+        if not prior:
+            continue
+        avg = sum(prior) / len(prior)
+        cur = ms.get(ref, 0.0)
+        items[sid] = {"current": cur, "avg": round(avg, 1), "gap": round(avg - cur, 1), "ratio": (cur / avg) if avg else 1.0}
+    return {"refMonth": ref, "items": items}
+
+
+def _low(sales: dict | None) -> bool:
+    return bool(sales) and sales["avg"] >= SALES_MIN_BASELINE and sales["ratio"] < SALES_LOW_RATIO
+
+
+def _gap_text(ref: str, sales: dict) -> str:
+    return f"{int(ref[5:])}月销量 {sales['current']:g}，前几个月平均 {sales['avg']:g}，差 {sales['gap']:g}"
+
+
 # ---------------------------------------------------------------- 候选门店
 
 def districts(db: Session, user: User, limit: int = 8) -> list[dict]:
@@ -108,10 +165,16 @@ def by_district(db: Session, user: User, district: str, limit: int = 15) -> list
     rows = _store_rows(db, user, district)
     last = _last_visits(db, user, [r.id for r in rows])
     commits = _commitments(db, user)
+    sales = sales_gaps(db, user)
     scored = []
     for r in rows:
         days = _days_since(last.get(r.id))
         reasons, tags, score = [], [], 0
+        sg = sales["items"].get(r.id)
+        if _low(sg):
+            reasons.append(_gap_text(sales["refMonth"], sg))
+            tags.append("销量偏低")
+            score += 60 + min(sg["gap"], 60)
         for t in commits.get(r.id, []):
             reasons.append(f"约定：{t.topic}（{_due_text(t.due_date)}）")
             tags.append("有约定")
@@ -176,6 +239,23 @@ def commitment_stores(db: Session, user: User) -> list[dict]:
     return out
 
 
+def by_sales_gap(db: Session, user: User, district: str | None = None, limit: int = 15) -> dict:
+    """本期销量低于平时水平的门店，按差额（冲刺潜力）从大到小"""
+    sales = sales_gaps(db, user)
+    if sales["refMonth"] is None:
+        return {"title": "销量数据还没有可用的月份", "items": []}
+    rows = {r.id: r for r in _store_rows(db, user, district)}
+    last = _last_visits(db, user, list(rows))
+    low = sorted(((sid, sg) for sid, sg in sales["items"].items() if sid in rows and _low(sg)), key=lambda x: -x[1]["gap"])
+    items = []
+    for sid, sg in low[:limit]:
+        days = _days_since(last.get(sid))
+        tail = "从未拜访" if days is None else f"{days} 天前去过"
+        items.append(_cand(rows[sid], f"{_gap_text(sales['refMonth'], sg)}；{tail}", ["销量偏低"], days))
+    where = f"{district}" if district else "全部片区"
+    return {"title": f"{int(sales['refMonth'][5:])}月销量低于平时的门店（{where}，差额从大到小）", "items": items}
+
+
 def suggest(db: Session, user: User, kind: str, district: str | None = None) -> dict:
     if kind == "district":
         if not district:
@@ -185,6 +265,8 @@ def suggest(db: Session, user: User, kind: str, district: str | None = None) -> 
         return {"title": "最近两周拜访过的门店", "items": recent(db, user)}
     if kind == "commitments":
         return {"title": "有到期约定的门店", "items": commitment_stores(db, user)}
+    if kind == "gap":
+        return by_sales_gap(db, user, district)
     raise ValueError("不支持的类型")
 
 
@@ -251,17 +333,20 @@ def greeting(db: Session, user: User) -> dict:
     plan = today_items(db, user)
     commits = commitment_stores(db, user)
     dist = districts(db, user, limit=4)
-    options = [{"label": d["district"], "kind": "district", "district": d["district"]} for d in dist]
-    options += [{"label": "最近拜访过的店", "kind": "recent"}, {"label": "我承诺过的事", "kind": "commitments"}]
+    district_opts = [{"label": d["district"], "kind": "district", "district": d["district"]} for d in dist]
+    sales = sales_gaps(db, user)
+    tail = ([{"label": "销量低于平时的店", "kind": "gap"}] if any(_low(sg) for sg in sales["items"].values()) else [])
+    tail += [{"label": "最近拜访过的店", "kind": "recent"}, {"label": "我承诺过的事", "kind": "commitments"}]
     if plan:
         done = sum(1 for p in plan if p["status"] == "visited")
         if done == len(plan):
             text = f"今天计划的 {len(plan)} 家店都去完了。还想再去哪里吗？"
         else:
             text = f"今天计划去 {len(plan)} 家店，已完成 {done} 家。"
-        return {"mode": "plan", "text": text, "plan": plan, "commitments": commits, "options": options if done == len(plan) else options[-2:]}
+        return {"mode": "plan", "text": text, "plan": plan, "commitments": commits, "options": district_opts + tail if done == len(plan) else tail}
     if commits:
         names = "、".join(c["name"] for c in commits[:3])
         text = f"你有 {len(commits)} 家店的约定到期了：{names}{'等' if len(commits) > 3 else ''}。要把它们安排进今天吗？也可以告诉我今天想去哪个区。"
-        return {"mode": "commitments", "text": text, "plan": [], "commitments": commits, "options": [{"label": "把到期约定的店安排进今天", "kind": "commitments"}] + options[:-1]}
-    return {"mode": "ask", "text": "今天准备去哪个区的门店？也可以从最近拜访过的店、承诺过的事里挑。", "plan": [], "commitments": [], "options": options}
+        return {"mode": "commitments", "text": text, "plan": [], "commitments": commits,
+                "options": [{"label": "把到期约定的店安排进今天", "kind": "commitments"}] + district_opts + [o for o in tail if o["kind"] != "commitments"]}
+    return {"mode": "ask", "text": "今天准备去哪个区的门店？也可以从销量偏低的店、最近拜访过的店、承诺过的事里挑。", "plan": [], "commitments": [], "options": district_opts + tail}

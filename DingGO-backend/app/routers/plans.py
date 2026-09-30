@@ -9,7 +9,7 @@ from ..services import plans
 
 router = APIRouter(prefix="/plans", tags=["今日计划"])
 
-SOURCES = {"district", "recent", "commitments", "commitment", "sales", "manual"}
+SOURCES = {"district", "recent", "commitments", "commitment", "gap", "sales", "manual"}
 
 
 class PlanIn(BaseModel):

@@ -81,3 +81,57 @@ def test_recent_and_permissions(client, auth):
     assert added == []  # 看不到的门店不能加入自己的计划
     assert client.get("/plans/today", headers=bob).json() == []
     assert client.post("/plans", json={"storeIds": [a["id"]], "source": "bad"}, headers=auth).status_code == 400
+
+
+def month_key(offset):
+    d = date.today().replace(day=1)
+    y, m = d.year, d.month + offset
+    while m <= 0:
+        y, m = y - 1, m + 12
+    return f"{y}-{m:02d}"
+
+
+def linked_store(client, auth, name, district, ext, sales):
+    from app.db import SessionLocal
+    from app.models import StoreDirectory
+
+    with SessionLocal() as db:
+        db.add(StoreDirectory(platform="智生活", external_id=ext, name=name, district=district, monthly_sales=sales))
+        db.commit()
+    return make_store(client, auth, name, district=district, platform="智生活", externalId=ext)
+
+
+def test_sales_gap_candidates_and_greeting(client, auth):
+    cur, m1, m2, m3 = month_key(0), month_key(-1), month_key(-2), month_key(-3)
+    low = linked_store(client, auth, "掉量店", "渝中区", "1", {m3: 20, m2: 20, m1: 20, cur: 4})     # 平时 20，本月 4：差 16
+    less = linked_store(client, auth, "小掉量店", "渝中区", "2", {m3: 10, m2: 10, m1: 10, cur: 5})  # 平时 10，本月 5：差 5
+    ok = linked_store(client, auth, "正常店", "渝中区", "3", {m3: 20, m2: 20, m1: 20, cur: 19})
+    tiny = linked_store(client, auth, "很小的店", "渝中区", "4", {m3: 1, m2: 0, m1: 1, cur: 0})       # 平时水平太小，不提醒
+    res = client.get("/plans/suggest?kind=gap", headers=auth).json()
+    assert [x["name"] for x in res["items"]] == ["掉量店", "小掉量店"]  # 差额大的在前
+    assert "销量 4" in res["items"][0]["reason"] and "平均 20" in res["items"][0]["reason"] and "差 16" in res["items"][0]["reason"]
+    assert res["items"][0]["tags"] == ["销量偏低"] and f"{int(cur[5:])}月" in res["title"]
+    assert client.get("/plans/suggest?kind=gap&district=九龙坡区", headers=auth).json()["items"] == []
+    # 按区选店时，销量偏低的店排在前面并带理由
+    top = client.get("/plans/suggest?kind=district&district=渝中区", headers=auth).json()["items"]
+    assert [x["name"] for x in top][:2] == ["掉量店", "小掉量店"] and "销量偏低" in top[0]["tags"]
+    g = client.get("/plans/greeting", headers=auth).json()
+    assert "销量低于平时的店" in [o["label"] for o in g["options"]]
+    assert low and less and ok and tiny
+
+
+def test_sales_gap_uses_latest_month_with_enough_data(client, auth):
+    # 当月还没有数据（数据只更新到上个月）：拿上个月对比，不能把所有店都当成 0 销量
+    m1, m2, m3, m4 = month_key(-1), month_key(-2), month_key(-3), month_key(-4)
+    linked_store(client, auth, "甲", "渝中区", "1", {m4: 30, m3: 30, m2: 30, m1: 6})
+    linked_store(client, auth, "乙", "渝中区", "2", {m4: 30, m3: 30, m2: 30, m1: 30})
+    linked_store(client, auth, "丙", "渝中区", "3", {m4: 30, m3: 30, m2: 30, m1: 29})
+    res = client.get("/plans/suggest?kind=gap", headers=auth).json()
+    assert [x["name"] for x in res["items"]] == ["甲"] and f"{int(m1[5:])}月销量 6" in res["items"][0]["reason"]
+
+
+def test_no_sales_data_means_no_gap_option(client, auth):
+    setup_stores(client, auth)
+    g = client.get("/plans/greeting", headers=auth).json()
+    assert "销量低于平时的店" not in [o["label"] for o in g["options"]]
+    assert client.get("/plans/suggest?kind=gap", headers=auth).json()["items"] == []
