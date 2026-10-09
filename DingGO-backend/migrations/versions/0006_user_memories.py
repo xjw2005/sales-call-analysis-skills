@@ -15,7 +15,7 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table('chat_sessions', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('summary', sa.Text(), nullable=False, server_default=''))
+        batch_op.add_column(sa.Column('summary', sa.Text(), nullable=True))  # MySQL 的 TEXT 列不能有默认值，所以允许为空
         batch_op.add_column(sa.Column('summary_upto', sa.Integer(), nullable=False, server_default='0'))
         batch_op.add_column(sa.Column('state', sa.JSON(), nullable=True))
     op.create_table('user_memories',

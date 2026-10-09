@@ -214,7 +214,7 @@ class ChatSession(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     title: Mapped[str] = mapped_column(String(60), default="")
-    summary: Mapped[str] = mapped_column(Text, default="")  # 更早对话的摘要（超过一定长度时压缩）
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)  # 更早对话的摘要（超过一定长度时压缩）
     summary_upto: Mapped[int] = mapped_column(Integer, default=0)  # 摘要覆盖到的最后一条消息 id
     state: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # 上一轮的查询条件和结果，下一轮接着用
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
