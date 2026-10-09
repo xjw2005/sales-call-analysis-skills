@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from .ai import worker
-from .routers import admin, assistant, auth, files, plans, stores, todos, visits
+from .routers import admin, assistant, auth, files, memories, plans, stores, todos, visits
 
 
 @asynccontextmanager
@@ -43,5 +43,5 @@ def health():
     return {"ok": True}
 
 
-for r in (auth, stores, visits, todos, assistant, plans, files, admin):
+for r in (auth, stores, visits, todos, assistant, plans, memories, files, admin):
     app.include_router(r.router)

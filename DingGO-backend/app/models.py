@@ -214,8 +214,34 @@ class ChatSession(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     title: Mapped[str] = mapped_column(String(60), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")  # 更早对话的摘要（超过一定长度时压缩）
+    summary_upto: Mapped[int] = mapped_column(Integer, default=0)  # 摘要覆盖到的最后一条消息 id
+    state: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # 上一轮的查询条件和结果，下一轮接着用
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class UserMemory(Base):
+    """助手对一个人的记忆：只记「这个人怎么说话、怎么用」（别名、常跑区域、纠正过的做法），不记会变的业务事实。
+    模型只能提议（pending），销售确认后才生效（active）；销售明确说的直接生效。scope=team 的由经理设为团队通用，下属也能用"""
+
+    __tablename__ = "user_memories"
+    __table_args__ = (UniqueConstraint("user_id", "kind", "key", "scope"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # alias | preference | lesson
+    key: Mapped[str] = mapped_column(String(64))
+    value: Mapped[dict | list | str | None] = mapped_column(JSON, nullable=True)
+    scope: Mapped[str] = mapped_column(String(8), default="user")  # user | team
+    trust: Mapped[str] = mapped_column(String(16), default="model_inferred")  # user_asserted | user_confirmed | model_inferred
+    status: Mapped[str] = mapped_column(String(8), default="pending", index=True)  # pending | active
+    reason: Mapped[str] = mapped_column(String(255), default="")
+    session_id: Mapped[int | None] = mapped_column(ForeignKey("chat_sessions.id"), nullable=True)
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class ChatMessage(Base):

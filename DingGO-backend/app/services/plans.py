@@ -229,9 +229,14 @@ def search(db: Session, user: User, province: str = "", city: str = "", district
     """按条件找门店。province/city/district 做包含匹配（「重庆」能匹配「重庆市」）；
     visit：any | never（从未拜访）| stale（30 天以上没去）| recent（14 天内去过）；
     sort：priority（综合优先级）| sales_gap（销量低于平时，差额大的在前）| oldest（最久没去的在前）| recent（最近去过的在前）"""
+    def hit(value: str, text: str) -> bool:
+        """空表示不限；「官渡区|呈贡区」表示多个里任意一个（别名指向多个地区时用）"""
+        parts = [x.strip() for x in (value or "").split("|") if x.strip()]
+        return not parts or any(x in (text or "") for x in parts)
+
     rows = [r for r in _store_rows(db, user)
-            if (not province or province in (r.province or "")) and (not city or city in (r.city or ""))
-            and (not district or district in (r.district or "")) and (not keyword or keyword in (r.name or "") or keyword in (r.address or ""))
+            if hit(province, r.province) and hit(city, r.city) and hit(district, r.district)
+            and (not keyword or hit(keyword, r.name) or hit(keyword, r.address))
             and (not cooperation or r.cooperation_status == cooperation)]
     ranked = _rank(db, user, rows)
     if visit == "never":

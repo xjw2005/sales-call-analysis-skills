@@ -8,19 +8,22 @@
 """
 
 import json
+import logging
 import re
+import threading
 import time
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..db import SessionLocal
 from ..models import ChatLog, ChatMessage, ChatSession, Store, User, utcnow
 from ..services import plans
 from ..services.access import store_filter, team_ids
 from ..services.playbook import OBJECTIONS
 from ..services.summary import list_todos, list_visits, summarize_store
-from . import core
+from . import core, memory
 from . import knowledge as kb
 
 SYSTEM = """你是「DingGo」，A2 奶粉销售团队的 AI 销售助手，和一线销售对话。回答要简短、口语化、可直接照着用。
@@ -43,6 +46,11 @@ A) 调用工具查真实数据（一次一个，结果会在下一轮发给你�
 {"action":"tool","tool":"remove_from_plan","args":{"names":["店名"]}}
   → 把门店从今日计划里移出（销售说“XX不去了”“算了”时）。
 
+{"action":"tool","tool":"propose_memory","args":{"kind":"alias|preference","key":"说法","value":["官渡区","呈贡区"],"reason":"为什么记","user_said":false}}
+  → 记住销售的说法或习惯。只记「这个人怎么说话、怎么用」，例如别名（「城东」指哪几个区）、常跑区域；不记销量、计划、拜访这些会变的业务事实。
+    销售在这句话里明确说了“以后……就指……”“记住……”：user_said=true；你自己推测的：user_said=false（会让销售点确认后才生效）。
+    别名的 value 写地区名（多个用数组）；之后用 search_stores 查这类别名时，多个地区用「官渡区|呈贡区」这样的写法放进 district（竖线表示任意一个）。
+
 B) 把最近一次 search_stores 找到的门店以卡片展示给销售（销售可勾选加入今日计划）：
 {"action":"show_stores","reply":"一句话说明你按什么条件挑的、有几家"}
   找到的门店为空时不要用它，用 answer 如实告诉销售没有，并说明我们有哪些地方的门店（先查 list_regions）。
@@ -54,6 +62,8 @@ C) 其他问题（销售话术、异议怎么回、某家店的情况、下一�
 - 话术类问题给出 2-3 条要点和一句参考话术；
 - 「刚才给销售看的门店」和「今日计划」是上下文，销售说“第二家”“前三家”“这几家”指的就是它们；
 - 调用 add_to_plan / remove_from_plan 成功后，用 answer 简短确认（说清加了几家、现在计划共几家）；失败或有歧义，如实告诉销售并让他说清楚；
+- 销售说的地区你在库里找不到、又像是一个说法（城东、大学城、机场路一带）时：先看「助手记住的说法」有没有；没有就问销售指哪几个区（可用 list_regions 给他选项），他回答后再用 propose_memory 记下；
+- 「助手记住的说法」里已经有的别名，直接按它理解，不要再追问；
 - 销售问我们有没有某地的门店、有哪些区，先用 list_regions 查，不要凭印象回答；
 - 不知道当前是哪家店、问题又和某家店有关时，提醒他先说店名或在顶部选择门店。
 """
@@ -66,16 +76,20 @@ def _clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n] + "…"
 
 
-def find_store(db: Session, user: User, question: str, store_id: str | None) -> Store | None:
-    """问题里提到的店名优先，其次是首页当前选中的门店"""
+POINTER = re.compile(r"这家|那家|该店|这个店|这店|它的|它最|它上次|当前门店|这家店")
+
+
+def find_store(db: Session, user: User, question: str, store_id: str | None) -> tuple[Store | None, bool]:
+    """问题里提到的店名优先；其次是首页当前选中的门店。返回 (门店, 这句话是否真的在说它)：
+    没提店名也没用「这家 / 它」时，选中的门店只作为背景，不展开资料，免得把话题带偏"""
     ids = team_ids(db, user)
     rows = db.execute(select(Store.id, Store.name).where(store_filter(ids))).all()
     hits = [(len(name), sid) for sid, name in rows if name and len(name) >= 2 and name in question]
     if hits:
-        return db.get(Store, max(hits)[1])
+        return db.get(Store, max(hits)[1]), True
     if store_id and str(store_id).isdigit():
-        return db.scalars(select(Store).where(Store.id == int(store_id), store_filter(ids))).first()
-    return None
+        return db.scalars(select(Store).where(Store.id == int(store_id), store_filter(ids))).first(), bool(POINTER.search(question))
+    return None, False
 
 
 def store_context(db: Session, user: User, store: Store) -> str:
@@ -115,12 +129,21 @@ def core_date(ms: int) -> str:
     return fmt_date(ms)
 
 
-def build_user_message(db: Session, user: User, question: str, store: Store | None, history: list[dict], shown: list[Store] | None = None) -> str:
+def build_user_message(db: Session, user: User, question: str, store: Store | None, history: list[dict], shown: list[Store] | None = None,
+                       memory: str = "", summary: str = "", last_search: dict | None = None, focus: bool = True) -> str:
     parts = []
-    if store is not None:
+    if store is not None and focus:
         parts.append("门店资料：\n" + store_context(db, user, store))
+    elif store is not None:
+        parts.append(f"门店资料：顶部选中了「{store.name}」，但这句话没有提到它；销售问到它时再说“请问是指 {store.name} 吗”，不要主动展开。")
     else:
         parts.append("门店资料：当前没有选中门店，问题里也没有提到门店名。")
+    if memory:
+        parts.append("助手记住的说法（销售确认过的，直接按它理解）：\n" + memory)
+    if summary:
+        parts.append("更早对话的摘要：\n" + _clip(summary, 600))
+    if last_search:
+        parts.append(f"上一轮的查询：条件 {json.dumps(last_search.get('args', {}), ensure_ascii=False)}，找到 {last_search.get('found', 0)} 家")
     if shown:
         parts.append("刚才给销售看的门店（按顺序）：\n" + "\n".join(f"{i}. {x.name}" for i, x in enumerate(shown, 1)))
     plan = plans.today_items(db, user)
@@ -227,6 +250,9 @@ class Run:
         self.rounds, self.tokens = 0, 0
         self.first_token_ms: int | None = None
         self.t0 = time.time()
+        self.question, self.session_id = "", None
+        self.memory_result: dict | None = None
+        self.last_search: dict | None = None
 
     # ---- 模型调用（流式 / 非流式）
     def llm(self, system: str, user_msg: str) -> str:
@@ -278,6 +304,7 @@ class Run:
                 kw["limit"] = 10
             items = plans.search(db, user, **kw)
             self.found = {"title": _title(kw, len(items)), "items": items, "kind": "search"}
+            self.last_search = {"args": {k: v for k, v in kw.items() if v and v not in ("any", "priority")}, "found": len(items)}
             self.shown = [x for x in (db.get(Store, int(c["storeId"])) for c in items) if x]
             result = json.dumps({"found": len(items), "stores": [{"position": i, "name": c["name"], "district": c["district"], "reason": c["reason"]} for i, c in enumerate(items, 1)]}, ensure_ascii=False)
         elif name == "add_to_plan":
@@ -312,13 +339,23 @@ class Run:
             self.plan_changed = plans.today_items(db, user)
             ok = bool(removed)
             result = json.dumps({"removed": removed, "planTotal": len(self.plan_changed), "problems": problems}, ensure_ascii=False)
+        elif name == "propose_memory":
+            try:
+                m, state = memory.propose(db, user, str(args.get("kind") or ""), str(args.get("key") or ""), args.get("value"),
+                                          str(args.get("reason") or ""), bool(args.get("user_said")), self.question, self.session_id)
+                self.memory_result = {"id": m.id, "text": memory.render(m), "status": m.status}
+                result = json.dumps({"status": state, "text": memory.render(m), "needConfirm": m.status == "pending"}, ensure_ascii=False)
+            except memory.MemoryError_ as e:
+                ok, result = False, json.dumps({"error": str(e)}, ensure_ascii=False)
         else:
             ok, result = False, json.dumps({"error": "没有这个工具"}, ensure_ascii=False)
         self.tools.append({"tool": name, "args": args, "ok": ok})
         return result
 
-    def run(self, question: str, store: Store | None, history: list[dict]) -> dict:
-        base = build_user_message(self.db, self.user, question, store, history, self.shown)
+    def run(self, question: str, store: Store | None, history: list[dict], focus: bool = True, summary: str = "", last_search: dict | None = None) -> dict:
+        self.question = question
+        base = build_user_message(self.db, self.user, question, store, history, self.shown,
+                                  memory=memory.relevant_text(self.db, self.user, question), summary=summary, last_search=last_search, focus=focus)
         transcript = ""
         self.emit({"type": "status", "text": "思考中…"})
         for step in range(MAX_TOOL_ROUNDS + 1):
@@ -348,6 +385,8 @@ class Run:
                 res = {"text": reply or "目前资料里没有这方面的信息。", "suggestions": sugg}
             if self.plan_changed is not None:
                 res["plan"] = self.plan_changed
+            if self.memory_result is not None:
+                res["memory"] = self.memory_result  # 待确认的，前端显示「记住 / 不用」；已生效的，前端提示「已记住」
             return res
         return {"text": "这个问题我查了几轮还没理清，可以说得再具体一点吗？", "suggestions": []}
 
@@ -378,8 +417,8 @@ def _load_session(db: Session, user: User, session_id: int | None, question: str
     return sess
 
 
-def _stored_history(db: Session, sess: ChatSession, limit: int = 10) -> list[dict]:
-    rows = db.scalars(select(ChatMessage).where(ChatMessage.session_id == sess.id, ChatMessage.role.in_(["user", "ai"]), ChatMessage.text != "")
+def _stored_history(db: Session, sess: ChatSession, limit: int = 6) -> list[dict]:
+    rows = db.scalars(select(ChatMessage).where(ChatMessage.session_id == sess.id, ChatMessage.id > sess.summary_upto, ChatMessage.role.in_(["user", "ai"]), ChatMessage.text != "")
                       .order_by(ChatMessage.id.desc()).limit(limit)).all()
     return [{"role": r.role, "text": r.text} for r in reversed(rows)]
 
@@ -398,12 +437,13 @@ def chat(db: Session, user: User, question: str, store_id: str | None = None, se
     question = _clip(question, 500)
     sess = _load_session(db, user, session_id, question)
     history = _stored_history(db, sess)
-    store = find_store(db, user, question, store_id)
+    store, focus = find_store(db, user, question, store_id)
     run = Run(db, user, emit, _stored_shown(db, user, sess))
     run.emit_stream = emit is not None
+    run.session_id = sess.id
     error, result = "", {"text": "", "suggestions": []}
     try:
-        result = run.run(question, store, history)
+        result = run.run(question, store, history, focus, sess.summary, (sess.state or {}).get("last_search"))
     except Exception as e:  # noqa: BLE001 记下来再抛给上层处理
         error = str(e)[:500]
         raise
@@ -421,9 +461,40 @@ def chat(db: Session, user: User, question: str, store_id: str | None = None, se
             if result.get("plan") is not None:
                 db.add(ChatMessage(session_id=sess.id, role="plan", payload={"plan": result["plan"]}))
         sess.updated_at = utcnow()
+        if run.last_search is not None:
+            sess.state = {"last_search": run.last_search}
         db.commit()
         result["logId"], result["sessionId"] = log.id, sess.id
+        if not error:
+            threading.Thread(target=compact_session, args=(sess.id,), daemon=True).start()
     return result
+
+
+COMPACT_AFTER = 14  # 摘要之后又累计了这么多条文字消息，就把更早的压成摘要
+KEEP_RAW = 6  # 压缩时保留最近这几条原文
+
+
+def compact_session(session_id: int) -> None:
+    """对话变长时，把早先的内容压成一段摘要存在会话里；近几轮保留原文。失败不影响对话"""
+    try:
+        with SessionLocal() as db:
+            sess = db.get(ChatSession, session_id)
+            if sess is None:
+                return
+            rows = list(db.scalars(select(ChatMessage).where(ChatMessage.session_id == sess.id, ChatMessage.id > sess.summary_upto,
+                                                             ChatMessage.role.in_(["user", "ai"]), ChatMessage.text != "").order_by(ChatMessage.id)))
+            if len(rows) <= COMPACT_AFTER:
+                return
+            old = rows[:-KEEP_RAW]
+            transcript = "\n".join(f"{'销售' if m.role == 'user' else '助手'}：{_clip(m.text, 300)}" for m in old)
+            prompt = ("把下面的对话压缩成不超过 300 字的摘要，只保留：销售关心的地区和门店、已经做出的决定（加入/移出计划）、"
+                      "还没解决的问题。不要保留寒暄。直接输出摘要文字，不要 JSON。\n\n"
+                      + (f"已有摘要：{sess.summary}\n\n" if sess.summary else "") + "新增对话：\n" + transcript)
+            text, _ = core.call_llm("你是对话摘要助手。", prompt, get_settings().llm_model, 0.1)
+            sess.summary, sess.summary_upto = _clip(text.replace("{", "").replace("}", ""), 500), old[-1].id
+            db.commit()
+    except Exception:  # noqa: BLE001
+        logging.getLogger("dinggo.ai").exception("compact session failed")
 
 
 def session_messages(db: Session, user: User, session_id: int) -> list[dict]:

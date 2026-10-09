@@ -193,7 +193,19 @@ SQL
 - **记录与反馈**：每次提问写一条 `chat_logs`（耗时、首字耗时、模型调用轮数、token、用到的工具、出错信息）；销售点「有用/没用」调用 `POST /chat/feedback`。优化提示词、估算成本都看这张表，例如：
   `SELECT DATE(created_at), COUNT(*), AVG(duration_ms), AVG(first_token_ms), SUM(tokens) FROM chat_logs GROUP BY 1;`
   `SELECT question, reply, feedback_note FROM chat_logs WHERE rating = -1 ORDER BY id DESC LIMIT 50;`
-- 小程序 `transport: 'cloud'`（云托管）不支持分片，会退回一次性返回。迁移 `0004_chat_logs`、`0005_chat_sessions` 容器启动时自动执行。
+- 小程序 `transport: 'cloud'`（云托管）不支持分片，会退回一次性返回。迁移 `0004_chat_logs`、`0005_chat_sessions`、`0006_user_memories` 容器启动时自动执行。
+
+## 助手记忆（学自 eigent 的轻量记忆设计）
+
+助手只记「这个人怎么说话、怎么用」：地区别名（「城东」= 官渡区 + 呈贡区）、常跑区域、纠正过的做法；**不记**销量、计划、拜访这些会变的业务事实（永远实时查库）。表 `user_memories`（迁移 `0006`）。
+
+- **模型只能提议，销售确认才生效**：模型调用 `propose_memory` 得到 `pending`（待确认），小程序对话里出现「记住 / 不用」条，销售点了才变 `active`；只有销售在这句话里明确说了（「以后城东就指官渡和呈贡」，且「城东」确实出现在原话里）才直接生效——模型谎称“用户说了”也不算。
+- **只带相关的**：每次提问只取别名出现在这句话里的记忆（偏好类量很少，总带），总量不超过 400 字；待确认的不会被当事实使用。
+- **每人最多 30 条**，待确认的提议 14 天没人理自动清掉。每人只能读写自己的；经理可把自己的别名/偏好设为「团队通用」（`POST /memories/{id}/team`），其下属提问时也会用到（标注「团队通用」）；纠正类只对自己生效。
+- 管理接口：`GET /memories`、`POST /memories`（手动添加，直接生效）、`POST /memories/{id}/confirm`、`PATCH /memories/{id}`、`DELETE /memories/{id}`；小程序「我的 → 助手记住了什么」使用。
+- 别名指向多个地区时，`search_stores` 的省/市/区县参数可写「官渡区|呈贡区」（竖线表示任意一个）。
+
+**会话层**：每轮保存上一轮的查询条件和结果数（`chat_sessions.state`）；对话超过 14 条文字后，早先的内容压成不超过 500 字的摘要（`summary`，后台线程异步做，失败不影响对话），之后提问带「摘要 + 最近 6 条原文」。顶部选中的门店只有当前这句话提到它（店名，或「这家 / 它」）才展开资料，否则只作背景。
 
 ## 备份
 
