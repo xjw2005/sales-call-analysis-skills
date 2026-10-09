@@ -135,3 +135,11 @@ def test_no_sales_data_means_no_gap_option(client, auth):
     g = client.get("/plans/greeting", headers=auth).json()
     assert "销量低于平时的店" not in [o["label"] for o in g["options"]]
     assert client.get("/plans/suggest?kind=gap", headers=auth).json()["items"] == []
+
+
+def test_plan_accepts_every_candidate_source_the_chat_can_produce(client, auth):
+    """对话里模型查出的候选卡片 kind 是 search（还有 gap / recent / commitments / district）：勾选确定时都不能被拒绝"""
+    a, b, c = setup_stores(client, auth)
+    for source, store in (("search", a), ("gap", b), ("recent", c), ("commitments", a), ("district", b), ("chat", c)):
+        r = client.post("/plans", json={"storeIds": [store["id"]], "source": source}, headers=auth)
+        assert r.status_code == 200, (source, r.text)

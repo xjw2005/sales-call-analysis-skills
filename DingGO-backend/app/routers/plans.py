@@ -9,7 +9,7 @@ from ..services import plans
 
 router = APIRouter(prefix="/plans", tags=["今日计划"])
 
-SOURCES = {"district", "recent", "commitments", "commitment", "gap", "sales", "manual"}
+SOURCES = {"district", "recent", "commitments", "commitment", "gap", "search", "chat", "sales", "manual"}  # search：对话里模型查出来的候选
 
 
 class PlanIn(BaseModel):
