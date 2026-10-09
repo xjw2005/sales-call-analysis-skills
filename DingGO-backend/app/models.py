@@ -206,6 +206,20 @@ class VisitPlan(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class BindCode(Base):
+    """一次性绑定码：管理员给某个人员生成，本人第一次打开小程序时输入，把自己的微信绑定到这个人员。
+    只存摘要，明文只在生成时返回一次；30 分钟有效，用一次作废"""
+
+    __tablename__ = "bind_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ChatSession(Base):
     """一段对话（服务端保存，只有本人能看）：上下文由服务端从这里取，前端只传会话号"""
 

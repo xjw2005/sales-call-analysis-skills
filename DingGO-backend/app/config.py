@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     wx_secret: str = ""
     # 开发登录：不调微信接口，用 code 直接当账号（仅开发调试用，上线必须关闭）
     dev_login: bool = True
+    # 不认识的微信不再自动建账号：必须输入管理员发的一次性绑定码才能绑定到自己的人员记录（开发登录不受影响）
+    require_bind_code: bool = True
+    bind_code_minutes: int = 30
 
     # 录音文件存放目录与对外访问地址（生成带时效的下载链接）
     storage_dir: str = "./data/uploads"

@@ -1,3 +1,6 @@
+import secrets
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -5,7 +8,9 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import require_admin
-from ..models import User, Visit
+from ..config import get_settings
+from ..models import BindCode, User, Visit, utcnow
+from ..security import hash_bind_code
 from ..services.accounts import MergeRefused, bind_wechat
 from ..services.constants import USER_ROLES
 from ..services.ingest import apply_analysis
@@ -74,6 +79,23 @@ def patch_user(user_id: int, body: UserPatch, db: Session = Depends(get_db)):
             setattr(u, field, getattr(body, field))
     db.commit()
     return user_out(u)
+
+
+@router.post("/users/{user_id}/bind-code")
+def create_bind_code(user_id: int, db: Session = Depends(get_db)):
+    """给还没绑定微信的人员生成一次性绑定码（明文只返回这一次，库里只存摘要）：发给本人，让他第一次打开小程序时输入"""
+    u = db.get(User, user_id)
+    if not u:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if u.openid is not None:
+        raise HTTPException(status_code=409, detail="这个人员已经绑定了微信")
+    for old in db.scalars(select(BindCode).where(BindCode.user_id == u.id, BindCode.used_at.is_(None))):
+        old.used_at = utcnow()  # 重新生成后，之前没用的码作废
+    code = f"{secrets.randbelow(10**8):08d}"
+    minutes = get_settings().bind_code_minutes
+    db.add(BindCode(user_id=u.id, code_hash=hash_bind_code(code), expires_at=utcnow() + timedelta(minutes=minutes)))
+    db.commit()
+    return {"user": user_out(u), "code": code, "expiresInMinutes": minutes}
 
 
 @router.post("/users/merge")

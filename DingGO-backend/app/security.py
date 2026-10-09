@@ -30,3 +30,21 @@ def sign_file(key: str, exp: int) -> str:
 
 def verify_file(key: str, exp: int, sig: str) -> bool:
     return exp >= int(time.time()) and hmac.compare_digest(sign_file(key, exp), sig)
+
+
+# 绑定令牌：微信身份已经验证（拿到 openid），但还没绑定到人员；只能用来提交绑定码，15 分钟有效
+def create_bind_token(openid: str) -> str:
+    exp = datetime.now(timezone.utc) + timedelta(minutes=15)
+    return jwt.encode({"typ": "bind", "openid": openid, "exp": exp}, get_settings().jwt_secret, algorithm="HS256")
+
+
+def decode_bind_token(token: str) -> str | None:
+    try:
+        payload = jwt.decode(token, get_settings().jwt_secret, algorithms=["HS256"])
+        return payload["openid"] if payload.get("typ") == "bind" else None
+    except (jwt.PyJWTError, KeyError):
+        return None
+
+
+def hash_bind_code(code: str) -> str:
+    return hashlib.sha256(f"bind:{get_settings().jwt_secret}:{code.strip()}".encode()).hexdigest()
