@@ -1,16 +1,75 @@
 const config = require('../config/index');
-const { request, delay } = require('./request');
+const { request, delay, ensureToken } = require('./request');
 const { getStore, listStores } = require('./store');
 const { OBJECTIONS } = require('../utils/playbook');
+const { lineSplitter, decode } = require('../utils/utf8');
 
 // AI 问答。真实模式：POST /chat，由后端调用大模型并结合门店数据作答（后期可改为流式输出）。
 // 演示模式：按关键词从门店演示数据中拼出回答，只用于看界面效果。
-async function ask({ question, storeId, history = [] }) {
-  if (!config.useMock && !config.mockAI) return request({ url: '/chat', method: 'POST', data: { question, storeId, history } });
+async function ask({ question, storeId, history = [], context }) {
+  if (!config.useMock && !config.mockAI) return request({ url: '/chat', method: 'POST', data: { question, storeId, history, context } });
   const named = (await listStores()).find((s) => question.indexOf(s.name) >= 0);
   const id = named ? named.id : storeId;
   const store = id ? await getStore(id).catch(() => null) : null;
   return delay({ ...mockAnswer(question, store), demo: true }, 700);
+}
+
+// 流式问答：边生成边显示。事件：onStatus(进度文字) / onDelta(回答文字的一小段)；返回完整结果。
+// 演示模式、云托管（不支持分片）时退回一次性返回。
+async function askStream(params, { onStatus, onDelta } = {}) {
+  if (config.useMock || config.mockAI || config.transport === 'cloud') return ask(params);
+  const token = await ensureToken();
+  const run = (tk) => new Promise((resolve, reject) => {
+    let final = null;
+    let failure = null;
+    const split = lineSplitter((line) => {
+      let ev;
+      try { ev = JSON.parse(line); } catch (e) { return; }
+      if (ev.type === 'status' && onStatus) onStatus(ev.text);
+      else if (ev.type === 'delta' && onDelta) onDelta(ev.text);
+      else if (ev.type === 'final') final = ev;
+      else if (ev.type === 'error') failure = ev.message;
+    });
+    const raw = [];
+    const task = wx.request({
+      url: `${config.baseUrl}/chat/stream`,
+      method: 'POST',
+      data: params,
+      header: { Authorization: `Bearer ${tk}` },
+      enableChunked: true,
+      responseType: 'arraybuffer',
+      success: (res) => {
+        if (res.statusCode === 401) return resolve({ unauthorized: true });
+        if (res.statusCode !== 200) {
+          // 出错时后端返回的是普通 JSON：{"message": "..."}
+          let msg = `请求失败 ${res.statusCode}`;
+          try { msg = JSON.parse(decode(new Uint8Array(res.data || raw[0] || new ArrayBuffer(0)))).message || msg; } catch (e) { /* 保持默认提示 */ }
+          return reject(new Error(msg));
+        }
+        if (failure) return reject(new Error(failure));
+        if (!final) return reject(new Error('回答中断了，请再试一次'));
+        return resolve(final);
+      },
+      fail: (err) => reject(new Error(err.errMsg || '网络异常')),
+    });
+    task.onChunkReceived((r) => {
+      raw[0] = r.data;
+      split(r.data);
+    });
+  });
+  let res = await run(token);
+  if (res.unauthorized) {
+    wx.removeStorageSync('token');
+    res = await run(await ensureToken());
+    if (res.unauthorized) throw new Error('登录已失效，请重新打开小程序');
+  }
+  return res;
+}
+
+// 对一次回答点「有用 / 没用」
+async function sendFeedback(logId, rating, note = '') {
+  if (config.useMock || config.mockAI || !logId) return true;
+  return request({ url: '/chat/feedback', method: 'POST', data: { logId, rating, note } });
 }
 
 function mockAnswer(q, store) {
@@ -52,4 +111,4 @@ function mockAnswer(q, store) {
   };
 }
 
-module.exports = { ask };
+module.exports = { ask, askStream, sendFeedback };

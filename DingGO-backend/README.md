@@ -177,6 +177,23 @@ SQL
 - **销量缺口**：候选里的「销量低于平时的店」（`kind=gap`，也会在按区选店时排前面并带理由）。销量取总门店清单里的按月销量 `store_directory.monthly_sales`，只对能关联到清单的门店有效。规则：「本期」取销量数据里最新、且至少 20% 门店已有数据的月份（不晚于当月，数据没更新到当月时拿上个月对比，不会把所有店当成 0 销量）；「平时水平」取本期之前最多 3 个月的平均；平时水平不足 2 的店不提醒；本期低于平时水平 70% 算偏低，按差额从大到小。阈值在 `app/services/plans.py` 顶部。销量数据需要定期重新导入才会更新。
 - 之后的阶段：月度目标合计（月中冲刺）、大模型对话选店、地图路线（依赖门店坐标）。
 
+## 首页对话（AI 问答、选店、排计划）
+
+`POST /chat/stream`（小程序用，逐行 JSON 流式返回）和 `POST /chat`（一次返回）。大模型每轮输出一个 JSON 动作，最多 4 轮工具调用，工具结果来自数据库：
+
+| 工具 | 作用 |
+|---|---|
+| `list_regions` | 省/市/区县及门店数 |
+| `search_stores` | 按省市区、关键词、合作状态、拜访情况（从未去/30 天没去/近期去过）、排序（综合优先级/销量偏低/最久没去/最近去过）找门店 |
+| `add_to_plan` / `remove_from_plan` | 对话里把门店加入、移出今日计划（可说「前三家」「第二家」「XX 不去了」） |
+
+- **上下文**：每次带上最近对话、「刚才给销售看的门店」（前端回传，只认有权限的）和今天的计划；提到店名就带上那家店的资料。
+- **流式**：事件 `status`（正在查门店…）→ `delta`（回答文字的一小段）→ `final`（完整结果，含候选门店 `cands`、更新后的计划 `plan`、`logId`）；出错是 `error` 事件。模型输出的是 JSON，服务端边收边把 `reply` 字段的文字取出来推送。
+- **记录与反馈**：每次提问写一条 `chat_logs`（耗时、首字耗时、模型调用轮数、token、用到的工具、出错信息）；销售点「有用/没用」调用 `POST /chat/feedback`。优化提示词、估算成本都看这张表，例如：
+  `SELECT DATE(created_at), COUNT(*), AVG(duration_ms), AVG(first_token_ms), SUM(tokens) FROM chat_logs GROUP BY 1;`
+  `SELECT question, reply, feedback_note FROM chat_logs WHERE rating = -1 ORDER BY id DESC LIMIT 50;`
+- 小程序 `transport: 'cloud'`（云托管）不支持分片，会退回一次性返回。迁移 `0004_chat_logs` 容器启动时自动执行。
+
 ## 备份
 
 - 数据库：`sudo docker compose exec db sh -c 'mysqldump -udinggo -p"$MYSQL_PASSWORD" dinggo' > backup.sql`（方式 B：`mysqldump -udinggo -p dinggo > backup.sql`）。

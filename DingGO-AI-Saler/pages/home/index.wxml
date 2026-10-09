@@ -42,9 +42,19 @@
         <!-- 用户气泡（阿福样式：右侧紫色） -->
         <view wx:if="{{msg.type === 'user'}}" class="msg user"><view class="bubble">{{msg.text}}</view></view>
 
-        <!-- AI 回答 -->
+        <!-- AI 回答（流式：没出字之前显示进度） -->
         <view wx:elif="{{msg.type === 'ai'}}" class="msg ai">
-          <view class="bubble"><text user-select>{{msg.text}}</text><view class="ai-note">{{msg.demo ? '演示内容（未接入大模型）' : 'AI 生成，仅供参考'}}</view></view>
+          <view class="bubble">
+            <text wx:if="{{msg.text}}" user-select>{{msg.text}}</text>
+            <view wx:elif="{{msg.streaming}}" class="status"><view class="dots"><view></view><view></view><view></view></view><text class="faint">{{msg.status || '思考中…'}}</text></view>
+            <view wx:if="{{!msg.streaming}}" class="ai-note row between">
+              <text>{{msg.demo ? '演示内容（未接入大模型）' : 'AI 生成，仅供参考'}}</text>
+              <view wx:if="{{msg.logId}}" class="rate">
+                <text class="r {{msg.rating === 1 ? 'on' : ''}}" data-id="{{msg.id}}" data-rating="1" bindtap="rate">👍 有用</text>
+                <text class="r {{msg.rating === -1 ? 'off' : ''}}" data-id="{{msg.id}}" data-rating="-1" bindtap="rate">👎 没用</text>
+              </view>
+            </view>
+          </view>
           <view wx:if="{{msg.suggestions.length && index === messages.length - 1}}" class="chips">
             <view wx:for="{{msg.suggestions}}" wx:key="*this" wx:for-item="s" class="chip" data-q="{{s}}" bindtap="tapSuggestion">{{s}}</view>
           </view>
@@ -209,7 +219,7 @@
         <view wx:elif="{{msg.type === 'divider'}}" class="divider">— {{msg.text}} —</view>
       </block>
 
-      <view wx:if="{{thinking}}" class="msg ai"><view class="bubble dots"><view></view><view></view><view></view></view></view>
+      <view wx:if="{{thinking && !asking}}" class="msg ai"><view class="bubble dots"><view></view><view></view><view></view></view></view>
       <view id="bottom" style="height:24rpx"></view>
     </view>
   </scroll-view>

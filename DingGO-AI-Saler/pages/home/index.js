@@ -6,7 +6,7 @@ const storage = require('../../utils/storage');
 const { listStores } = require('../../services/store');
 const { listTodos, setTodoDone } = require('../../services/todo');
 const { getTodayPanel, markReviewSeen } = require('../../services/assistant');
-const { ask } = require('../../services/chat');
+const { askStream, sendFeedback } = require('../../services/chat');
 const plans = require('../../services/plan');
 const practice = require('../../services/practice');
 const { wechatMessage } = require('../../utils/playbook');
@@ -40,6 +40,7 @@ Page({
     messages: [],
     input: '',
     thinking: false,
+    asking: false, // 正在流式问答（回答气泡自己显示进度，不再显示底部的三个点）
     scrollTo: '',
     placeholder: PLACEHOLDERS[0],
     defaultPlaceholder: PLACEHOLDERS[0],
@@ -315,24 +316,69 @@ Page({
       return;
     }
     this.push({ type: 'user', text: question });
-    this.setData({ thinking: true });
-    let reply;
+    await this.askAI(question);
+  },
+  // 流式问答：先放一个空的回答气泡，收到一点文字就更新一点；结束后补候选门店、计划卡片
+  async askAI(question) {
+    const history = this.data.messages.filter((m) => (m.type === 'user' || m.type === 'ai') && m.text).slice(-11, -1).map((m) => ({ role: m.type, text: m.text }));
+    const lastCands = [...this.data.messages].reverse().find((m) => m.type === 'cands');
+    const context = { shown: lastCands ? lastCands.cands.items.map((it) => ({ storeId: it.storeId, name: it.name })) : [] };
+    this.push({ type: 'ai', text: '', status: '思考中…', streaming: true, suggestions: [] });
+    const id = this.data.messages[this.data.messages.length - 1].id;
+    this.setData({ thinking: true, asking: true });
+    let text = '';
+    let timer = null;
+    const flush = () => { timer = null; this.replace(id, { text, status: '' }); this.setData({ scrollTo: 'bottom' }); };
     try {
-      reply = await ask({
-        question,
-        storeId: this.storeId(),
-        history: this.data.messages.filter((m) => m.type === 'user' || m.type === 'ai').slice(-10).map((m) => ({ role: m.type, text: m.text })),
-      });
+      const reply = await askStream(
+        { question, storeId: this.storeId(), history, context },
+        {
+          onStatus: (st) => { if (!text) this.replace(id, { status: st }); },
+          onDelta: (d) => { text += d; if (!timer) timer = setTimeout(flush, 80); },
+        },
+      );
+      if (timer) clearTimeout(timer);
+      this.replace(id, { text: reply.text || text, status: '', streaming: false, suggestions: reply.suggestions || [], demo: !!reply.demo, logId: reply.logId || 0 });
+      this.setData({ thinking: false, asking: false });
+      // 对话里说“今天想去销量低的店”：助手给出真实候选门店，勾选后确定今日计划
+      if (reply.cands && reply.cands.items && reply.cands.items.length) {
+        const { title, kind, items } = reply.cands;
+        this.push({ type: 'cands', cands: { title, kind, items: items.map((it) => ({ ...it, checked: !!it.checked })), done: false } });
+      }
+      // 对话里说“把前三家加进今天”：计划已经改了，展示最新的今日计划
+      if (reply.plan) {
+        this.push({ type: 'plan', plan: reply.plan });
+        this.loadHeader();
+      }
     } catch (err) {
-      reply = { text: `出错了：${err.message}，请稍后再试。`, suggestions: [] };
+      if (timer) clearTimeout(timer);
+      this.replace(id, { text: text || `出错了：${err.message}，请稍后再试。`, status: '', streaming: false });
+      this.setData({ thinking: false, asking: false });
     }
-    this.setData({ thinking: false });
-    this.push({ type: 'ai', text: reply.text, suggestions: reply.suggestions || [], demo: !!reply.demo });
-    // 对话里说“今天想去销量低的店”：助手给出真实候选门店，勾选后确定今日计划
-    if (reply.cands && reply.cands.items && reply.cands.items.length) {
-      const { title, kind, items } = reply.cands;
-      this.push({ type: 'cands', cands: { title, kind, items: items.map((it) => ({ ...it, checked: !!it.checked })), done: false } });
+    this.saveChat(this.data.messages);
+  },
+  // 对回答点「有用 / 没用」；没用时可以补一句原因
+  async rate(e) {
+    const { id, rating } = e.currentTarget.dataset;
+    const m = this.data.messages.find((x) => x.id === id);
+    if (!m || !m.logId || m.rating) return;
+    const value = Number(rating);
+    this.replace(id, { rating: value });
+    try {
+      await sendFeedback(m.logId, value);
+    } catch (err) {
+      this.replace(id, { rating: 0 });
+      return wx.showToast({ title: err.message, icon: 'none' });
     }
+    if (value < 0) {
+      wx.showModal({
+        title: '哪里不对？', editable: true, placeholderText: '例如：没找到我想要的店 / 回答和这家店对不上（可不填）', confirmText: '提交', cancelText: '跳过',
+        success: (r) => { if (r.confirm && r.content && r.content.trim()) sendFeedback(m.logId, -1, r.content.trim()).catch(() => {}); },
+      });
+    } else {
+      wx.showToast({ title: '谢谢反馈', icon: 'none' });
+    }
+    return undefined;
   },
   newChat() {
     if (this.data.practice) this.setData({ practice: null, placeholder: this.data.defaultPlaceholder });
@@ -373,7 +419,7 @@ Page({
   openHistory(e) {
     const h = storage.get(HISTORY_KEY, []).find((x) => x.id === e.currentTarget.dataset.id);
     this.toggleDrawer();
-    if (h) this.setData({ chatId: h.id, messages: h.messages, practice: null, placeholder: this.data.defaultPlaceholder, scrollTo: 'bottom' });
+    if (h) this.setData({ chatId: h.id, messages: h.messages.map((m) => (m.streaming ? { ...m, streaming: false, text: m.text || '（这条回答没有完成）' } : m)), practice: null, placeholder: this.data.defaultPlaceholder, scrollTo: 'bottom' });
   },
   noop() {},
 });

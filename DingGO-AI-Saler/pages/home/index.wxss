@@ -125,3 +125,11 @@
 .cand-addr { font-size: 22rpx; margin-top: 2rpx; }
 .prow-col { display: flex; flex-direction: column; gap: 12rpx; align-items: flex-end; }
 .prow-btn.solid { background: #5b55e8; color: #fff; border-color: #5b55e8; }
+
+/* 流式回答：进度行与反馈 */
+.status { display: flex; align-items: center; gap: 14rpx; }
+.ai-note.row { align-items: center; gap: 20rpx; }
+.rate { display: flex; gap: 20rpx; }
+.rate .r { color: #a7aac2; font-size: 22rpx; padding: 4rpx 8rpx; }
+.rate .r.on { color: #5b55e8; font-weight: 600; }
+.rate .r.off { color: #f0544f; font-weight: 600; }
