@@ -1,0 +1,9 @@
+.box { padding-top: 120rpx; }
+.title { font-size: 44rpx; font-weight: 700; color: #2d2a9e; }
+.desc { margin-top: 20rpx; font-size: 28rpx; color: #6b6f8e; line-height: 1.7; }
+.code { margin-top: 56rpx; background: #fff; border-radius: 28rpx; height: 112rpx; padding: 0 36rpx; font-size: 44rpx; letter-spacing: 8rpx; font-weight: 600; }
+.ph { color: #a7aac2; font-size: 30rpx; letter-spacing: 0; font-weight: 400; }
+.error { margin-top: 20rpx; color: #f0544f; font-size: 26rpx; }
+.go { margin-top: 48rpx; }
+.go.off { opacity: 0.6; }
+.tip { margin-top: 32rpx; text-align: center; }

@@ -2,6 +2,7 @@ const config = require('../config/index');
 
 const TOKEN_KEY = 'token';
 const USER_KEY = 'user';
+const BIND_KEY = 'bindToken';
 let loginPromise = null;
 
 // 去掉值为空的参数，避免把 undefined 当成字符串传给后端
@@ -12,6 +13,31 @@ function clean(data) {
     if (data[k] !== undefined && data[k] !== null) out[k] = data[k];
   });
   return out;
+}
+
+let bindShown = false;
+function goBind() {
+  if (bindShown) return;
+  bindShown = true;
+  wx.reLaunch({ url: '/pages/bind/index', complete: () => { bindShown = false; } });
+}
+
+// 用管理员发的一次性绑定码，把自己的微信绑定到人员记录；成功后保存登录凭证
+async function bindWithCode(code) {
+  let bindToken = '';
+  try { bindToken = wx.getStorageSync(BIND_KEY) || ''; } catch (e) { /* 忽略 */ }
+  if (!bindToken) {
+    // 绑定令牌 15 分钟有效，过期了就重新走一遍微信登录拿新的
+    try { await login(); } catch (e) { if (!e.needBind) throw e; }
+    bindToken = wx.getStorageSync(BIND_KEY) || '';
+  }
+  const res = await send({ url: '/auth/bind', method: 'POST', data: { bindToken, code: String(code).trim() } });
+  if (res.statusCode === 401) wx.removeStorageSync(BIND_KEY);
+  if (res.statusCode !== 200) throw new Error((res.data && res.data.message) || '绑定失败');
+  wx.setStorageSync(TOKEN_KEY, res.data.token);
+  wx.removeStorageSync(BIND_KEY);
+  saveUser(res.data.user);
+  return res.data.user;
 }
 
 function getToken() {
@@ -59,6 +85,14 @@ function login() {
       .then(({ code }) => send({ url: '/auth/wx-login', method: 'POST', data: { code, name: '新用户' } }))
       .then((res) => {
         if (res.statusCode !== 200) throw new Error((res.data && res.data.message) || '登录失败');
+        if (res.data.needBind) {
+          // 这个微信还没有绑定到人员：去绑定页输入管理员发的绑定码
+          try { wx.setStorageSync(BIND_KEY, res.data.bindToken); } catch (e) { /* 忽略 */ }
+          goBind();
+          const err = new Error('请先绑定账号');
+          err.needBind = true;
+          throw err;
+        }
         wx.setStorageSync(TOKEN_KEY, res.data.token);
         saveUser(res.data.user);
         return res.data.token;
@@ -97,4 +131,4 @@ async function refreshUser() {
 
 const delay = (value, ms = 200) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
-module.exports = { request, delay, ensureToken, refreshUser };
+module.exports = { request, delay, ensureToken, refreshUser, bindWithCode };

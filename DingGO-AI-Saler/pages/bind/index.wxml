@@ -1,0 +1,10 @@
+<view class="page gradient-bg">
+  <view class="container box">
+    <view class="title">第一次使用，请绑定你的账号</view>
+    <view class="desc">向管理员要一个 8 位绑定码（30 分钟内有效、只能用一次），输入后就会绑定到你自己的人员记录，之后打开小程序直接进入。</view>
+    <input class="code" type="number" maxlength="8" placeholder="8 位绑定码" placeholder-class="ph" value="{{code}}" bindinput="onInput" confirm-type="done" bindconfirm="submit" />
+    <view wx:if="{{error}}" class="error">{{error}}</view>
+    <view class="btn-primary go {{loading ? 'off' : ''}}" bindtap="submit">{{loading ? '绑定中…' : '绑定'}}</view>
+    <view class="faint tip">没有绑定码、或者提示已过期？请联系管理员重新发一个。</view>
+  </view>
+</view>

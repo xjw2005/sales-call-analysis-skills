@@ -12,7 +12,8 @@
     "pages/todo/index",
     "pages/objection/index",
     "pages/store/pick/index",
-    "pages/memory/index"
+    "pages/memory/index",
+    "pages/bind/index"
   ],
   "window": {
     "navigationBarBackgroundColor": "#F2F3F8",
