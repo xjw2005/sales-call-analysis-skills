@@ -1,0 +1,11 @@
+.tip { margin: 16rpx 8rpx 8rpx; line-height: 1.6; }
+.sec-title { font-size: 26rpx; color: #a7aac2; margin: 28rpx 8rpx 12rpx; align-items: center; }
+.link { color: #5b55e8; }
+.item { margin-bottom: 16rpx; }
+.text { font-size: 30rpx; font-weight: 600; line-height: 1.5; }
+.top { align-items: flex-start; gap: 16rpx; }
+.meta { margin-top: 6rpx; }
+.btns, .acts { margin-top: 18rpx; gap: 24rpx; justify-content: flex-end; }
+.btn-ghost.small, .btn-primary.small { height: 64rpx; line-height: 64rpx; padding: 0 36rpx; font-size: 26rpx; }
+.act { color: #5b55e8; font-size: 26rpx; }
+.act.danger { color: #f0544f; }

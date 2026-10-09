@@ -1,0 +1,36 @@
+<view class="page gradient-bg">
+  <view class="container">
+    <view class="faint tip">助手只记「你怎么说话、怎么用」，比如「城东」指哪几个区。销量、计划这些会变的事，它每次都是现查的。</view>
+
+    <block wx:if="{{pending.length}}">
+      <view class="sec-title">待你确认</view>
+      <view wx:for="{{pending}}" wx:key="id" class="card item">
+        <view class="text">{{item.text}}</view>
+        <view class="row gap btns">
+          <view class="btn-ghost small" data-id="{{item.id}}" bindtap="remove">不用</view>
+          <view class="btn-primary small" data-id="{{item.id}}" bindtap="confirm">记住</view>
+        </view>
+      </view>
+    </block>
+
+    <view class="sec-title row between"><text>已记住</text><text class="link" bindtap="add">+ 教助手一个说法</text></view>
+    <view wx:for="{{active}}" wx:key="id" class="card item">
+      <view class="row between top">
+        <view class="text">{{item.text}}</view>
+        <text wx:if="{{item.scope === 'team'}}" class="tag primary">团队通用</text>
+      </view>
+      <view class="faint meta">用过 {{item.hits}} 次</view>
+      <view class="row gap acts">
+        <text class="act" data-id="{{item.id}}" data-kind="{{item.kind}}" data-key="{{item.key}}" data-value="{{item.value}}" bindtap="edit">修改</text>
+        <text wx:if="{{isManager && item.kind !== 'lesson'}}" class="act" data-id="{{item.id}}" data-scope="{{item.scope}}" bindtap="share">{{item.scope === 'team' ? '取消团队通用' : '设为团队通用'}}</text>
+        <text class="act danger" data-id="{{item.id}}" bindtap="remove">删除</text>
+      </view>
+    </view>
+    <empty-state wx:if="{{loaded && !active.length && !pending.length}}" compact title="还没有记住任何东西" desc="和助手聊天时，它会问你要不要记住某个说法；你也可以点右上的「教助手一个说法」。" />
+
+    <block wx:if="{{team.length}}">
+      <view class="sec-title">团队通用（上级设置）</view>
+      <view wx:for="{{team}}" wx:key="id" class="card item"><view class="text">{{item.text}}</view></view>
+    </block>
+  </view>
+</view>

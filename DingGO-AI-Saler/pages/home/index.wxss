@@ -133,3 +133,6 @@
 .rate .r { color: #a7aac2; font-size: 22rpx; padding: 4rpx 8rpx; }
 .rate .r.on { color: #5b55e8; font-weight: 600; }
 .rate .r.off { color: #f0544f; font-weight: 600; }
+
+.memory-card { margin-top: 8rpx; }
+.mem-text { font-size: 30rpx; font-weight: 600; line-height: 1.6; margin: 4rpx 0 8rpx; }

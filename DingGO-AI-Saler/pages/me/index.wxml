@@ -15,6 +15,7 @@
     </view>
 
     <view class="card menu">
+      <view wx:if="{{!useMock}}" class="menu-item row between" bindtap="openMemory"><text>助手记住了什么</text><text class="faint">›</text></view>
       <view class="menu-item row between" bindtap="showPrivacy"><text>隐私与录音告知</text><text class="faint">›</text></view>
       <view class="menu-item row between" bindtap="clearChats"><text>清空助手对话记录</text><text class="faint">›</text></view>
       <view class="menu-item row between" bindtap="showAbout"><text>关于</text><text class="faint">›</text></view>

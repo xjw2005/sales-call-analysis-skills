@@ -8,6 +8,7 @@ const { listTodos, setTodoDone } = require('../../services/todo');
 const { getTodayPanel, markReviewSeen } = require('../../services/assistant');
 const { askStream, sendFeedback, listSessions, getSession } = require('../../services/chat');
 const plans = require('../../services/plan');
+const memoryApi = require('../../services/memory');
 const practice = require('../../services/practice');
 const { wechatMessage } = require('../../utils/playbook');
 
@@ -345,6 +346,8 @@ Page({
         const { title, kind, items } = reply.cands;
         this.push({ type: 'cands', cands: { title, kind, items: items.map((it) => ({ ...it, checked: !!it.checked })), done: false } });
       }
+      // 助手想记住一个说法：待确认的显示「记住 / 不用」，销售点了才生效；已生效的只提示
+      if (reply.memory) this.push({ type: 'memory', memory: { ...reply.memory, done: reply.memory.status === 'active' ? 'saved' : '' } });
       // 对话里说“把前三家加进今天”：计划已经改了，展示最新的今日计划
       if (reply.plan) {
         this.push({ type: 'plan', plan: reply.plan });
@@ -356,6 +359,18 @@ Page({
       this.setData({ thinking: false, asking: false });
     }
     this.saveChat(this.data.messages);
+  },
+  async answerMemory(e) {
+    const { msg, accept } = e.currentTarget.dataset;
+    const m = this.data.messages.find((x) => x.id === msg);
+    if (!m || m.memory.done) return;
+    try {
+      if (accept) await memoryApi.confirmMemory(m.memory.id);
+      else await memoryApi.deleteMemory(m.memory.id);
+      this.replace(msg, { memory: { ...m.memory, done: accept ? 'saved' : 'dropped' } });
+    } catch (err) {
+      wx.showToast({ title: err.message, icon: 'none' });
+    }
   },
   // 对回答点「有用 / 没用」；没用时可以补一句原因
   async rate(e) {

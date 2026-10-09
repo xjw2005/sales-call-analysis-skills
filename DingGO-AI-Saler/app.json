@@ -11,7 +11,8 @@
     "pages/brief/index",
     "pages/todo/index",
     "pages/objection/index",
-    "pages/store/pick/index"
+    "pages/store/pick/index",
+    "pages/memory/index"
   ],
   "window": {
     "navigationBarBackgroundColor": "#F2F3F8",

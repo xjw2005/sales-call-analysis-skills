@@ -29,6 +29,9 @@ Page({
       },
     });
   },
+  openMemory() {
+    wx.navigateTo({ url: '/pages/memory/index' });
+  },
   showPrivacy() {
     wx.showModal({
       title: '隐私与录音告知',

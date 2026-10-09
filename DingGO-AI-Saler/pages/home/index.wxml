@@ -102,6 +102,24 @@
           </view>
         </view>
 
+        <!-- 助手想记住一个说法：待确认时让销售点「记住 / 不用」 -->
+        <view wx:elif="{{msg.type === 'memory'}}" class="msg ai">
+          <view class="panel memory-card">
+            <view class="panel-body">
+              <view class="sec-title">助手想记住</view>
+              <view class="mem-text">{{msg.memory.text}}</view>
+              <view class="panel-btns row">
+                <view wx:if="{{msg.memory.done === 'saved'}}" class="pb">已记住，可在「我的」里修改</view>
+                <view wx:elif="{{msg.memory.done === 'dropped'}}" class="pb">好的，不记</view>
+                <block wx:else>
+                  <view class="pb" data-msg="{{msg.id}}" data-accept="" bindtap="answerMemory">不用</view>
+                  <view class="pb primary" data-msg="{{msg.id}}" data-accept="1" bindtap="answerMemory">记住</view>
+                </block>
+              </view>
+            </view>
+          </view>
+        </view>
+
         <!-- 今日计划卡片 -->
         <view wx:elif="{{msg.type === 'plan'}}" class="msg ai">
           <view class="panel">
