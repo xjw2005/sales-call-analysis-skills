@@ -195,6 +195,9 @@ SQL
   `SELECT question, reply, feedback_note FROM chat_logs WHERE rating = -1 ORDER BY id DESC LIMIT 50;`
 - 小程序 `transport: 'cloud'`（云托管）不支持分片，会退回一次性返回。迁移 `0004_chat_logs`、`0005_chat_sessions`、`0006_user_memories` 容器启动时自动执行。
 
+## 账号合并会带走助手的数据
+`POST /admin/users/merge` 合并时，新账号名下的对话、记忆、今日计划、提问记录等**所有指向用户的记录**（外键从模型元数据里自动找，以后新增的表也会自动处理）都会迁到旧人员名下，同名记忆 / 同一天同一家店的计划冲突时保留旧人员的；返回的 `moved` 列出迁移了哪些表多少条。新账号已有门店、拜访、待办或下属时仍然拒绝合并。
+
 ## 助手记忆（学自 eigent 的轻量记忆设计）
 
 助手只记「这个人怎么说话、怎么用」：地区别名（「城东」= 官渡区 + 呈贡区）、常跑区域、纠正过的做法；**不记**销量、计划、拜访这些会变的业务事实（永远实时查库）。表 `user_memories`（迁移 `0006`）。

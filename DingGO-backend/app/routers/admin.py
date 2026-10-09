@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import require_admin
-from ..models import Store, Todo, User, Visit
+from ..models import User, Visit
+from ..services.accounts import MergeRefused, bind_wechat
 from ..services.constants import USER_ROLES
 from ..services.ingest import apply_analysis
 from ..services.summary import serialize_visit
@@ -81,25 +82,16 @@ def merge_users(body: MergeIn, db: Session = Depends(get_db)):
     new, old = db.get(User, int(body.fromId)), db.get(User, int(body.intoId))
     if not new or not old or new.id == old.id:
         raise HTTPException(status_code=404, detail="用户不存在")
-    if old.openid is not None:
-        raise HTTPException(status_code=409, detail="目标人员已经绑定了微信账号")
-    if new.openid is None:
-        raise HTTPException(status_code=400, detail="来源账号没有微信身份")
-    used = sum(
-        db.scalar(select(func.count()).select_from(model).where(cond)) or 0
-        for model, cond in (
-            (Store, Store.primary_sales_id == new.id), (Visit, Visit.visitor_id == new.id),
-            (Todo, (Todo.assignee_id == new.id) | (Todo.created_by == new.id)), (User, User.manager_id == new.id),
-        )
-    )
-    if used:
-        raise HTTPException(status_code=409, detail="来源账号已经有门店、拜访或待办，不能合并")
-    openid = new.openid
-    db.delete(new)
-    db.flush()
-    old.openid = openid
+    try:
+        moved = bind_wechat(db, new, old)
+    except MergeRefused as e:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(e))
     db.commit()
-    return user_out(old)
+    out = user_out(old)
+    out["moved"] = moved  # 迁移了哪些表多少条（对话、记忆、计划等），方便核对
+    return out
+
 
 
 @router.post("/visits/{visit_id}/analysis")
