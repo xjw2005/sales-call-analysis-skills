@@ -281,7 +281,6 @@ def test_merge_legacy_user_with_wechat_account(client):
 
 
 def test_ai_endpoints_not_ready(client, auth):
-    assert client.post("/chat", json={"question": "hi"}, headers=auth).status_code == 501
     assert client.post("/practice/start", json={}, headers=auth).status_code == 501
 
 

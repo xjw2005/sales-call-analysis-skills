@@ -10,7 +10,7 @@ async function ask({ question, storeId, history = [] }) {
   const named = (await listStores()).find((s) => question.indexOf(s.name) >= 0);
   const id = named ? named.id : storeId;
   const store = id ? await getStore(id).catch(() => null) : null;
-  return delay(mockAnswer(question, store), 700);
+  return delay({ ...mockAnswer(question, store), demo: true }, 700);
 }
 
 function mockAnswer(q, store) {

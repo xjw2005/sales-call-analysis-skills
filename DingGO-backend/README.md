@@ -2,7 +2,7 @@
 
 Python + FastAPI + MySQL，给小程序 `DingGO-AI-Saler` 提供真实数据，替代飞书多维表（01 门店主档、02 门店拜访记录）。
 第一期只做基础功能：登录、门店、拜访（含无录音拜访）、录音上传、费用确认、待办（含月度目标）、今日待办、进店前简报、旧数据导入。
-**AI 录音链路（转写 + 分析）已接入**，见「AI 录音链路」一节，配置密钥后启用；首页问答和陪练尚未接入（返回 501）。
+**AI 录音链路（转写 + 分析）已接入**，见「AI 录音链路」一节，配置密钥后启用；首页对话已接入（`POST /chat`），陪练尚未接入（返回 501）。
 
 ## 上线顺序总览
 
@@ -300,7 +300,8 @@ curl -X POST http://服务器IP:8000/admin/visits/12/analysis -H "X-Admin-Token:
 | `GET/POST /todos`、`PATCH /todos/:id`、`POST /todos/:id/done`、`/undo` | 待办：新建（可指派下属）、更新目标/达成/进展、完成、撤销 |
 | `GET /assistant/today?storeId=`、`GET /assistant/brief/:storeId` | 今日待办大卡片、进店前简报（规则计算） |
 | `GET/POST /admin/users`、`PATCH /admin/users/:id`、`POST /admin/users/merge`、`POST /admin/visits/:id/analysis` | 管理：人员、合并账号、写入分析结果（需 `X-Admin-Token`） |
-| `POST /chat`、`/practice/*` | 问答、陪练，暂返回 501 |
+| `POST /chat` `{question, storeId, history}` | 首页对话：大模型把「今天想去销量低的店」翻译成条件，后端查库返回真实候选门店（`cands`）；或依据门店资料和知识库回答问题。每人每天上限 `DAILY_CHAT_LIMIT`（默认 200） |
+| `/practice/*` | 陪练，暂返回 501 |
 | `POST /visits/:id/retry`、`POST /visits/:id/rejudge` | 处理失败后重新处理；把无效录音人工判为有效并分析 |
 | `POST /admin/visits/:id/retry?force=` | 管理员强制重试（无法确认是否已提交转写时用） |
 

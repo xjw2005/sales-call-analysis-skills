@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     # 后台处理线程数与每人每日分析次数上限
     worker_threads: int = 2
     daily_visit_limit: int = 30
+    daily_chat_limit: int = 200  # 每人每天最多提问次数
 
     # 识别费用估算：每小时录音多少元
     asr_price_per_hour: float = 1.26

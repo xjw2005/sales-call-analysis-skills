@@ -5,7 +5,7 @@ const scenarios = require('../model/practice');
 const sessions = {};
 
 function listScenarios() {
-  if (!config.useMock && !config.mockAI) return request({ url: '/practice/scenarios' });
+  if (!config.useMock && !config.mockPractice) return request({ url: '/practice/scenarios' });
   return delay(scenarios.map(({ id, title, concern, level, desc }) => ({ id, title, concern, level, desc })));
 }
 
@@ -16,7 +16,7 @@ function scenarioByConcern(concern) {
 
 // 开始陪练：返回客户第一句话
 function start(scenarioId, storeName) {
-  if (!config.useMock && !config.mockAI) return request({ url: '/practice/start', method: 'POST', data: { scenarioId, storeName } });
+  if (!config.useMock && !config.mockPractice) return request({ url: '/practice/start', method: 'POST', data: { scenarioId, storeName } });
   const sc = scenarios.find((x) => x.id === scenarioId) || scenarios[0];
   const id = `p${Date.now()}`;
   sessions[id] = { sc, answers: [] };
@@ -25,7 +25,7 @@ function start(scenarioId, storeName) {
 
 // 销售回答一句，返回客户下一句；轮次用完后 finished=true
 function turn(sessionId, text) {
-  if (!config.useMock && !config.mockAI) return request({ url: '/practice/turn', method: 'POST', data: { sessionId, text } });
+  if (!config.useMock && !config.mockPractice) return request({ url: '/practice/turn', method: 'POST', data: { sessionId, text } });
   const s = sessions[sessionId];
   s.answers.push(text);
   const next = s.sc.lines[s.answers.length];
@@ -34,7 +34,7 @@ function turn(sessionId, text) {
 
 // 结束点评：演示版按关键词命中和回答长度粗略打分
 function finish(sessionId) {
-  if (!config.useMock && !config.mockAI) return request({ url: '/practice/finish', method: 'POST', data: { sessionId } });
+  if (!config.useMock && !config.mockPractice) return request({ url: '/practice/finish', method: 'POST', data: { sessionId } });
   const { sc, answers } = sessions[sessionId];
   const all = answers.join('');
   const dims = sc.dims.map(([name, words]) => {

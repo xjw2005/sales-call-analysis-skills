@@ -327,7 +327,12 @@ Page({
       reply = { text: `出错了：${err.message}，请稍后再试。`, suggestions: [] };
     }
     this.setData({ thinking: false });
-    this.push({ type: 'ai', text: reply.text, suggestions: reply.suggestions || [] });
+    this.push({ type: 'ai', text: reply.text, suggestions: reply.suggestions || [], demo: !!reply.demo });
+    // 对话里说“今天想去销量低的店”：助手给出真实候选门店，勾选后确定今日计划
+    if (reply.cands && reply.cands.items && reply.cands.items.length) {
+      const { title, kind, items } = reply.cands;
+      this.push({ type: 'cands', cands: { title, kind, items: items.map((it) => ({ ...it, checked: !!it.checked })), done: false } });
+    }
   },
   newChat() {
     if (this.data.practice) this.setData({ practice: null, placeholder: this.data.defaultPlaceholder });
