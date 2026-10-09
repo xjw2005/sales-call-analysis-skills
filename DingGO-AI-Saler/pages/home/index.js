@@ -6,7 +6,7 @@ const storage = require('../../utils/storage');
 const { listStores } = require('../../services/store');
 const { listTodos, setTodoDone } = require('../../services/todo');
 const { getTodayPanel, markReviewSeen } = require('../../services/assistant');
-const { askStream, sendFeedback } = require('../../services/chat');
+const { askStream, sendFeedback, listSessions, getSession } = require('../../services/chat');
 const plans = require('../../services/plan');
 const practice = require('../../services/practice');
 const { wechatMessage } = require('../../utils/playbook');
@@ -36,6 +36,7 @@ Page({
     todayHint: '',
     todayCount: 0,
     chatId: '',
+    sessionId: 0, // 服务端的对话号（真实模式）：上下文由服务端按它取；第一次提问后由服务端分配
     // 消息类型：user | ai | greet | cands | plan | todo | practice-intro | customer | result | divider
     messages: [],
     input: '',
@@ -103,6 +104,7 @@ Page({
     this.setData({ messages: this.data.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
   },
   saveChat(messages) {
+    if (!config.useMock && !config.mockAI) return; // 真实模式：对话在服务端保存
     const first = messages.find((m) => m.type === 'user');
     if (!first) return;
     const { chatId, currentStore } = this.data;
@@ -320,9 +322,6 @@ Page({
   },
   // 流式问答：先放一个空的回答气泡，收到一点文字就更新一点；结束后补候选门店、计划卡片
   async askAI(question) {
-    const history = this.data.messages.filter((m) => (m.type === 'user' || m.type === 'ai') && m.text).slice(-11, -1).map((m) => ({ role: m.type, text: m.text }));
-    const lastCands = [...this.data.messages].reverse().find((m) => m.type === 'cands');
-    const context = { shown: lastCands ? lastCands.cands.items.map((it) => ({ storeId: it.storeId, name: it.name })) : [] };
     this.push({ type: 'ai', text: '', status: '思考中…', streaming: true, suggestions: [] });
     const id = this.data.messages[this.data.messages.length - 1].id;
     this.setData({ thinking: true, asking: true });
@@ -331,13 +330,14 @@ Page({
     const flush = () => { timer = null; this.replace(id, { text, status: '' }); this.setData({ scrollTo: 'bottom' }); };
     try {
       const reply = await askStream(
-        { question, storeId: this.storeId(), history, context },
+        { question, storeId: this.storeId(), sessionId: this.data.sessionId || undefined },
         {
           onStatus: (st) => { if (!text) this.replace(id, { status: st }); },
           onDelta: (d) => { text += d; if (!timer) timer = setTimeout(flush, 80); },
         },
       );
       if (timer) clearTimeout(timer);
+      if (reply.sessionId) this.setData({ sessionId: reply.sessionId });
       this.replace(id, { text: reply.text || text, status: '', streaming: false, suggestions: reply.suggestions || [], demo: !!reply.demo, logId: reply.logId || 0 });
       this.setData({ thinking: false, asking: false });
       // 对话里说“今天想去销量低的店”：助手给出真实候选门店，勾选后确定今日计划
@@ -352,7 +352,7 @@ Page({
       }
     } catch (err) {
       if (timer) clearTimeout(timer);
-      this.replace(id, { text: text || `出错了：${err.message}，请稍后再试。`, status: '', streaming: false });
+      this.replace(id, { text: text || err.message || '出错了，请稍后再试', status: '', streaming: false });
       this.setData({ thinking: false, asking: false });
     }
     this.saveChat(this.data.messages);
@@ -382,7 +382,7 @@ Page({
   },
   newChat() {
     if (this.data.practice) this.setData({ practice: null, placeholder: this.data.defaultPlaceholder });
-    this.setData({ chatId: `c${Date.now()}`, messages: [], input: '', scrollTo: '' });
+    this.setData({ chatId: `c${Date.now()}`, sessionId: 0, messages: [], input: '', scrollTo: '' });
     this.greet();
   },
 
@@ -406,20 +406,47 @@ Page({
   // ---- 抽屉：打开时隐藏自定义标签栏，避免它浮在抽屉之上 ----
   toggleDrawer() {
     const drawerOpen = !this.data.drawerOpen;
-    this.setData({
-      drawerOpen,
-      histories: drawerOpen ? storage.get(HISTORY_KEY, []).map((h) => ({ ...h, time: fmt.date(h.updatedAt) })) : this.data.histories,
-    });
+    this.setData({ drawerOpen });
+    if (drawerOpen) this.loadHistories();
     if (typeof this.getTabBar === 'function' && this.getTabBar()) this.getTabBar().setData({ hidden: drawerOpen });
+  },
+  // 对话记录：真实模式从服务端取（只有自己的），演示模式用本机存储
+  async loadHistories() {
+    if (config.useMock || config.mockAI) {
+      return this.setData({ histories: storage.get(HISTORY_KEY, []).map((h) => ({ ...h, time: fmt.date(h.updatedAt) })) });
+    }
+    try {
+      const list = await listSessions();
+      return this.setData({ histories: list.map((h) => ({ id: h.id, title: h.title, time: fmt.date(h.updatedAt) })) });
+    } catch (err) {
+      return wx.showToast({ title: err.message, icon: 'none' });
+    }
   },
   pickStore(e) {
     this.toggleDrawer();
     this.useStore(this.data.stores.find((x) => x.id === e.currentTarget.dataset.id));
   },
-  openHistory(e) {
-    const h = storage.get(HISTORY_KEY, []).find((x) => x.id === e.currentTarget.dataset.id);
+  async openHistory(e) {
+    const id = e.currentTarget.dataset.id;
     this.toggleDrawer();
-    if (h) this.setData({ chatId: h.id, messages: h.messages.map((m) => (m.streaming ? { ...m, streaming: false, text: m.text || '（这条回答没有完成）' } : m)), practice: null, placeholder: this.data.defaultPlaceholder, scrollTo: 'bottom' });
+    if (config.useMock || config.mockAI) {
+      const h = storage.get(HISTORY_KEY, []).find((x) => x.id === id);
+      if (h) this.setData({ chatId: h.id, messages: h.messages.map((m) => (m.streaming ? { ...m, streaming: false, text: m.text || '（这条回答没有完成）' } : m)), practice: null, placeholder: this.data.defaultPlaceholder, scrollTo: 'bottom' });
+      return;
+    }
+    try {
+      const rows = await getSession(id);
+      // 服务端保存的消息还原成页面上的消息：提问 / 回答 / 候选门店卡片 / 今日计划卡片
+      const messages = rows.map((m) => {
+        if (m.role === 'user') return { id: mid(), type: 'user', text: m.text };
+        if (m.role === 'ai') return { id: mid(), type: 'ai', text: m.text, suggestions: [], logId: m.logId || 0 };
+        if (m.role === 'cands') return { id: mid(), type: 'cands', cands: { ...m.payload, items: (m.payload.items || []).map((it) => ({ ...it, checked: false })), done: true } };
+        return { id: mid(), type: 'plan', plan: (m.payload && m.payload.plan) || [] };
+      });
+      this.setData({ chatId: `s${id}`, sessionId: Number(id), messages, practice: null, placeholder: this.data.defaultPlaceholder, scrollTo: 'bottom' });
+    } catch (err) {
+      wx.showToast({ title: err.message, icon: 'none' });
+    }
   },
   noop() {},
 });

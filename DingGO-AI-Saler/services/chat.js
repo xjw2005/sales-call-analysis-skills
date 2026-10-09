@@ -6,8 +6,8 @@ const { lineSplitter, decode } = require('../utils/utf8');
 
 // AI 问答。真实模式：POST /chat，由后端调用大模型并结合门店数据作答（后期可改为流式输出）。
 // 演示模式：按关键词从门店演示数据中拼出回答，只用于看界面效果。
-async function ask({ question, storeId, history = [], context }) {
-  if (!config.useMock && !config.mockAI) return request({ url: '/chat', method: 'POST', data: { question, storeId, history, context } });
+async function ask({ question, storeId, sessionId }) {
+  if (!config.useMock && !config.mockAI) return request({ url: '/chat', method: 'POST', data: { question, storeId, sessionId } });
   const named = (await listStores()).find((s) => question.indexOf(s.name) >= 0);
   const id = named ? named.id : storeId;
   const store = id ? await getStore(id).catch(() => null) : null;
@@ -66,6 +66,14 @@ async function askStream(params, { onStatus, onDelta } = {}) {
   return res;
 }
 
+// 服务端保存的对话（只有自己的）：列表 / 取一段对话的全部消息
+async function listSessions() {
+  return request({ url: '/chat/sessions' });
+}
+async function getSession(id) {
+  return request({ url: `/chat/sessions/${id}` });
+}
+
 // 对一次回答点「有用 / 没用」
 async function sendFeedback(logId, rating, note = '') {
   if (config.useMock || config.mockAI || !logId) return true;
@@ -111,4 +119,4 @@ function mockAnswer(q, store) {
   };
 }
 
-module.exports = { ask, askStream, sendFeedback };
+module.exports = { ask, askStream, sendFeedback, listSessions, getSession };
