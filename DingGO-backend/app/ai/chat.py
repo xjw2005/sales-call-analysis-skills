@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..models import ChatLog, Store, User
+from ..models import ChatLog, ChatMessage, ChatSession, Store, User, utcnow
 from ..services import plans
 from ..services.access import store_filter, team_ids
 from ..services.playbook import OBJECTIONS
@@ -365,17 +365,45 @@ def shown_stores(db: Session, user: User, context: dict | None) -> list[Store]:
     return out
 
 
-def chat(db: Session, user: User, question: str, store_id: str | None = None, history: list[dict] | None = None,
-         context: dict | None = None, emit=None) -> dict:
-    """一次提问。emit 不为空时走流式：进度和回答文字实时推给 emit；返回值始终是完整结果。
+def _load_session(db: Session, user: User, session_id: int | None, question: str) -> ChatSession:
+    """取（或新建）本人的对话。别人的会话号一律当作不存在，不泄露是否存在"""
+    if session_id:
+        sess = db.get(ChatSession, session_id)
+        if sess is None or sess.user_id != user.id:
+            raise LookupError("对话不存在")
+        return sess
+    sess = ChatSession(user_id=user.id, title=_clip(question, 20))
+    db.add(sess)
+    db.flush()
+    return sess
+
+
+def _stored_history(db: Session, sess: ChatSession, limit: int = 10) -> list[dict]:
+    rows = db.scalars(select(ChatMessage).where(ChatMessage.session_id == sess.id, ChatMessage.role.in_(["user", "ai"]), ChatMessage.text != "")
+                      .order_by(ChatMessage.id.desc()).limit(limit)).all()
+    return [{"role": r.role, "text": r.text} for r in reversed(rows)]
+
+
+def _stored_shown(db: Session, user: User, sess: ChatSession) -> list[Store]:
+    """这段对话里最近一次给销售看的候选门店（服务端自己记的，不信前端回传）"""
+    row = db.scalars(select(ChatMessage).where(ChatMessage.session_id == sess.id, ChatMessage.role == "cands").order_by(ChatMessage.id.desc())).first()
+    items = ((row.payload or {}).get("items") if row else None) or []
+    return shown_stores(db, user, {"shown": [{"storeId": it.get("storeId")} for it in items]})
+
+
+def chat(db: Session, user: User, question: str, store_id: str | None = None, session_id: int | None = None, emit=None) -> dict:
+    """一次提问。对话上下文（历史、刚给销售看的门店）由服务端按会话取；会话只有本人能访问。
+    emit 不为空时走流式：进度和回答文字实时推给 emit；返回值始终是完整结果。
     每次提问都记一条 chat_logs（耗时、模型轮数、token、用到的工具、出错信息）。"""
     question = _clip(question, 500)
+    sess = _load_session(db, user, session_id, question)
+    history = _stored_history(db, sess)
     store = find_store(db, user, question, store_id)
-    run = Run(db, user, emit, shown_stores(db, user, context))
+    run = Run(db, user, emit, _stored_shown(db, user, sess))
     run.emit_stream = emit is not None
     error, result = "", {"text": "", "suggestions": []}
     try:
-        result = run.run(question, store, history or [])
+        result = run.run(question, store, history)
     except Exception as e:  # noqa: BLE001 记下来再抛给上层处理
         error = str(e)[:500]
         raise
@@ -383,9 +411,30 @@ def chat(db: Session, user: User, question: str, store_id: str | None = None, hi
         log = ChatLog(user_id=user.id, question=question, reply=result.get("text", "")[:2000], store_id=store.id if store else None, tools=run.tools or None,
                       rounds=run.rounds, tokens=run.tokens, duration_ms=int((time.time() - run.t0) * 1000), first_token_ms=run.first_token_ms, error=error)
         db.add(log)
+        db.flush()
+        db.add(ChatMessage(session_id=sess.id, role="user", text=question))
+        if not error:
+            db.add(ChatMessage(session_id=sess.id, role="ai", text=result.get("text", ""), log_id=log.id,
+                               payload={"suggestions": result.get("suggestions") or []}))
+            if result.get("cands"):
+                db.add(ChatMessage(session_id=sess.id, role="cands", payload=result["cands"]))
+            if result.get("plan") is not None:
+                db.add(ChatMessage(session_id=sess.id, role="plan", payload={"plan": result["plan"]}))
+        sess.updated_at = utcnow()
         db.commit()
-        result["logId"] = log.id
+        result["logId"], result["sessionId"] = log.id, sess.id
     return result
+
+
+def session_messages(db: Session, user: User, session_id: int) -> list[dict]:
+    """取一段对话的全部消息（给小程序还原对话用）；不是本人的对话返回 LookupError"""
+    sess = db.get(ChatSession, session_id)
+    if sess is None or sess.user_id != user.id:
+        raise LookupError("对话不存在")
+    out = []
+    for m in db.scalars(select(ChatMessage).where(ChatMessage.session_id == sess.id).order_by(ChatMessage.id)):
+        out.append({"id": m.id, "role": m.role, "text": m.text, "payload": m.payload, "logId": m.log_id})
+    return out
 
 
 def _title(kw: dict, n: int) -> str:

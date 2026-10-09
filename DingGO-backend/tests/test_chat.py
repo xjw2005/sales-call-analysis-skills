@@ -141,29 +141,36 @@ def test_reply_extractor_streams_only_answer_text_across_chunk_boundaries():
 
 
 def test_context_shown_stores_and_plan_tools(client, auth, monkeypatch):
-    a = make_store(client, auth, "甲店", district="渝中区")
-    b = make_store(client, auth, "乙店", district="渝中区")
-    c = make_store(client, auth, "丙店", district="渝中区")
+    make_store(client, auth, "甲店", district="渝中区")
+    make_store(client, auth, "乙店", district="渝中区")
+    make_store(client, auth, "丙店", district="渝中区")
+    scripted(monkeypatch, [
+        {"action": "tool", "tool": "search_stores", "args": {"district": "渝中", "sort": "oldest"}},
+        {"action": "show_stores", "reply": "渝中区 3 家"},
+    ])
+    first = client.post("/chat", json={"question": "渝中区的店"}, headers=auth).json()
+    sid = first["sessionId"]
+    order = [c["name"] for c in first["cands"]["items"]]
     seen = []
     scripted(monkeypatch, [
         {"action": "tool", "tool": "add_to_plan", "args": {"positions": [1, 3]}},
-        {"action": "answer", "reply": "已把甲店、丙店加入今天。", "suggestions": []},
+        {"action": "answer", "reply": "已加入。", "suggestions": []},
     ], seen)
-    ctx = {"shown": [{"storeId": a["id"]}, {"storeId": b["id"]}, {"storeId": c["id"]}]}
-    r = client.post("/chat", json={"question": "把第一家和第三家加进今天", "context": ctx}, headers=auth).json()
-    assert "1. 甲店" in seen[0] and "3. 丙店" in seen[0]  # 刚给看的门店带进了上下文
-    assert [p["name"] for p in r["plan"]] == ["甲店", "丙店"] and r["logId"]
-    assert [p["name"] for p in client.get("/plans/today", headers=auth).json()] == ["甲店", "丙店"]
+    r = client.post("/chat", json={"question": "把第一家和第三家加进今天", "sessionId": sid}, headers=auth).json()
+    assert f"1. {order[0]}" in seen[0] and f"3. {order[2]}" in seen[0]  # 刚给看的门店由服务端按会话带进上下文
+    assert "销售：渝中区的店" in seen[0] and "助手：渝中区 3 家" in seen[0]  # 历史也来自服务端
+    assert [p["name"] for p in r["plan"]] == [order[0], order[2]] and r["logId"]
+    assert [p["name"] for p in client.get("/plans/today", headers=auth).json()] == [order[0], order[2]]
     seen.clear()
     scripted(monkeypatch, [
-        {"action": "tool", "tool": "remove_from_plan", "args": {"names": ["甲店"]}},
-        {"action": "tool", "tool": "add_to_plan", "args": {"names": ["乙店", "不存在的店"]}},
+        {"action": "tool", "tool": "remove_from_plan", "args": {"names": [order[0]]}},
+        {"action": "tool", "tool": "add_to_plan", "args": {"names": [order[1], "不存在的店"]}},
         {"action": "answer", "reply": "好了", "suggestions": []},
     ], seen)
-    r = client.post("/chat", json={"question": "甲店不去了，加乙店"}, headers=auth).json()
-    assert "今日计划：甲店（待去）；丙店（待去）" in seen[0]  # 今天的计划也在上下文里
-    assert '"removed": ["甲店"]' in seen[1] and "没有找到「不存在的店」" in seen[2]
-    assert [p["name"] for p in r["plan"]] == ["丙店", "乙店"]
+    r = client.post("/chat", json={"question": "第一家不去了，加另一家", "sessionId": sid}, headers=auth).json()
+    assert f"今日计划：{order[0]}（待去）；{order[2]}（待去）" in seen[0]
+    assert f'"removed": ["{order[0]}"]' in seen[1] and "没有找到「不存在的店」" in seen[2]
+    assert [p["name"] for p in r["plan"]] == [order[2], order[1]]
 
 
 def test_add_to_plan_cannot_reach_invisible_stores(client, auth, monkeypatch):
@@ -174,8 +181,8 @@ def test_add_to_plan_cannot_reach_invisible_stores(client, auth, monkeypatch):
         {"action": "tool", "tool": "add_to_plan", "args": {"names": ["甲店"], "positions": [1]}},
         {"action": "answer", "reply": "没加上", "suggestions": []},
     ])
-    r = client.post("/chat", json={"question": "加甲店", "context": {"shown": [{"storeId": a["id"]}]}}, headers=bob).json()
-    assert "plan" not in r and client.get("/plans/today", headers=bob).json() == []
+    r = client.post("/chat", json={"question": "加甲店"}, headers=bob).json()
+    assert "plan" not in r and client.get("/plans/today", headers=bob).json() == [] and a
 
 
 def test_stream_endpoint_events_log_and_feedback(client, auth, monkeypatch):
@@ -218,3 +225,113 @@ def test_stream_failure_becomes_error_event_and_is_not_leaky(client, auth, monke
     events = [json.loads(x) for x in r.text.splitlines() if x.strip()]
     assert events[-1] == {"type": "error", "message": "AI 暂时没有响应，请稍后再试"}
     assert "secret" not in r.text
+
+
+# ---------------------------------------------------------------- 会话隔离、限流排队
+
+def one_reply(monkeypatch, text="好的"):
+    scripted(monkeypatch, [{"action": "answer", "reply": text, "suggestions": []}] * 20)
+
+
+def test_sessions_are_private_and_persisted(client, auth, monkeypatch):
+    from .conftest import login
+    one_reply(monkeypatch, "你好呀")
+    r = client.post("/chat", json={"question": "你好"}, headers=auth).json()
+    sid = r["sessionId"]
+    assert client.get("/chat/sessions", headers=auth).json()[0]["title"] == "你好"
+    msgs = client.get(f"/chat/sessions/{sid}", headers=auth).json()
+    assert [(m["role"], m["text"]) for m in msgs] == [("user", "你好"), ("ai", "你好呀")] and msgs[1]["logId"] == r["logId"]
+    bob = login(client, "bob", "小李")
+    assert client.get("/chat/sessions", headers=bob).json() == []
+    assert client.get(f"/chat/sessions/{sid}", headers=bob).status_code == 404  # 看不到别人的对话
+    assert client.post("/chat", json={"question": "接着聊", "sessionId": sid}, headers=bob).status_code == 404  # 也不能往别人的对话里写
+    assert client.post("/chat/stream", json={"question": "接着聊", "sessionId": sid}, headers=bob).status_code == 404
+    assert client.delete(f"/chat/sessions/{sid}", headers=bob).status_code == 404
+    assert client.get(f"/chat/sessions/{sid}", headers=auth).status_code == 200
+    assert client.delete(f"/chat/sessions/{sid}", headers=auth).json() is True
+    assert client.get("/chat/sessions", headers=auth).json() == []
+
+
+def test_cands_and_plan_cards_are_stored_for_restore(client, auth, monkeypatch):
+    make_store(client, auth, "甲店", district="渝中区")
+    scripted(monkeypatch, [
+        {"action": "tool", "tool": "search_stores", "args": {"district": "渝中"}},
+        {"action": "show_stores", "reply": "找到了"},
+    ])
+    sid = client.post("/chat", json={"question": "渝中区"}, headers=auth).json()["sessionId"]
+    roles = [m["role"] for m in client.get(f"/chat/sessions/{sid}", headers=auth).json()]
+    assert roles == ["user", "ai", "cands"]
+
+
+def test_rate_limit_per_minute_and_daily_from_db(client, auth, monkeypatch):
+    from app.config import get_settings
+    one_reply(monkeypatch)
+    monkeypatch.setenv("CHAT_PER_MINUTE", "2")
+    get_settings.cache_clear()
+    assert client.post("/chat", json={"question": "a"}, headers=auth).status_code == 200
+    assert client.post("/chat", json={"question": "b"}, headers=auth).status_code == 200
+    r = client.post("/chat", json={"question": "c"}, headers=auth)
+    assert r.status_code == 429 and "提问太快" in r.json()["message"]
+    monkeypatch.setenv("CHAT_PER_MINUTE", "100")
+    monkeypatch.setenv("DAILY_CHAT_LIMIT", "2")
+    get_settings.cache_clear()
+    r = client.post("/chat", json={"question": "d"}, headers=auth)
+    assert r.status_code == 429 and "今天的提问次数" in r.json()["message"]  # 按数据库里的记录统计，重启不会清零
+    get_settings.cache_clear()
+
+
+def test_limiter_one_at_a_time_queue_and_overflow(monkeypatch):
+    import threading
+    import time
+    from app.ai.limits import ChatLimiter, Rejected
+    from app.config import get_settings
+
+    monkeypatch.setenv("CHAT_MAX_CONCURRENT", "1")
+    monkeypatch.setenv("CHAT_MAX_QUEUE", "1")
+    monkeypatch.setenv("CHAT_QUEUE_WAIT_SECONDS", "3")
+    get_settings.cache_clear()
+    lim = ChatLimiter()
+    lim.acquire(1)
+    try:
+        lim.acquire(1)
+        raise AssertionError("同一个人不能同时问两个")
+    except Rejected as e:
+        assert "还在回答" in e.message
+    waits, got = [], []
+
+    def second():
+        lim.acquire(2, on_wait=waits.append)
+        got.append(time.time())
+        lim.release(2)
+
+    t = threading.Thread(target=second)
+    t.start()
+    time.sleep(0.3)
+    try:
+        lim.acquire(3)  # 队伍已满（只允许 1 人排队）
+        raise AssertionError("队伍满了应该被拒绝")
+    except Rejected as e:
+        assert e.status == 503 and "人比较多" in e.message
+    assert waits == [1]  # 用户 2 排第 1 位
+    lim.release(1)
+    t.join(3)
+    assert got and lim.running == 0 and not lim.waiting  # 用户 1 放行后，排队的用户 2 接着进
+    monkeypatch.setenv("CHAT_QUEUE_WAIT_SECONDS", "1")
+    get_settings.cache_clear()
+    lim.acquire(1)
+    try:
+        lim.acquire(2)
+        raise AssertionError("排队超时应该被拒绝")
+    except Rejected as e:
+        assert "排队时间太长" in e.message
+    lim.release(1)
+    get_settings.cache_clear()
+
+
+def test_model_rate_limited_gets_clear_message(client, auth, monkeypatch):
+    def limited(*a, **k):
+        raise RuntimeError("模型调用连续失败: HTTP 429: too many")
+
+    monkeypatch.setattr(core, "call_llm", limited)
+    r = client.post("/chat", json={"question": "你好"}, headers=auth)
+    assert r.status_code == 502 and "请求比较多" in r.json()["message"]

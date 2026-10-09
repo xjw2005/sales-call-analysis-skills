@@ -206,6 +206,32 @@ class VisitPlan(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ChatSession(Base):
+    """一段对话（服务端保存，只有本人能看）：上下文由服务端从这里取，前端只传会话号"""
+
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(60), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class ChatMessage(Base):
+    """对话里的一条：user 提问 | ai 回答 | cands 候选门店卡片 | plan 今日计划卡片"""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("chat_sessions.id"), index=True)
+    role: Mapped[str] = mapped_column(String(8))
+    text: Mapped[str] = mapped_column(Text, default="")
+    payload: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    log_id: Mapped[int | None] = mapped_column(ForeignKey("chat_logs.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ChatLog(Base):
     """首页对话的每一次提问：耗时、模型轮数、token 用量，以及销售的「有用 / 没用」反馈（用于优化提示词和控制成本）"""
 

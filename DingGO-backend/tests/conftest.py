@@ -35,6 +35,15 @@ def fresh_db():
     yield
 
 
+@pytest.fixture(autouse=True)
+def fresh_limiter():
+    from app.ai.limits import limiter
+
+    limiter.recent.clear(), limiter.active_users.clear(), limiter.waiting.clear()
+    limiter.running = 0
+    yield
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
