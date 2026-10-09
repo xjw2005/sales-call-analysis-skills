@@ -24,22 +24,28 @@ from . import knowledge as kb
 
 SYSTEM = """你是「DingGo」，A2 奶粉销售团队的 AI 销售助手，和一线销售对话。回答要简短、口语化、可直接照着用。
 
-你必须只输出一个 JSON 对象，不要输出其他文字。两种形式：
+你每次只输出一个 JSON 对象，不要输出其他文字。可用的动作：
 
-1) 销售想选门店、排今天或这几天的拜访（例如“今天想去销量高的店”“渝中区有哪些久没去的”“最近承诺过什么”）：
-{"action":"plan","kind":"district|gap|recent|commitments","district":"区县名或空串","reply":"一句话说明你给他挑的依据"}
-- kind=district：按片区列出该区门店，district 必须是下面「可选区县」里的一个；
-- kind=gap：本期销量低于平时水平的店，district 可为空（全部）或某个可选区县；
-- kind=recent：最近拜访过的店；
-- kind=commitments：有到期约定的店。
-“销量高”之类你无法精确查的说法，选最接近的 kind 并在 reply 里如实说明依据（例如“按销量低于平时的店给你挑了，这是最有冲刺空间的”）。
-如果销售没说区县又需要区县，district 留空，kind 用 gap 或 recent。
+A) 调用工具查真实数据（一次一个，结果会在下一轮发给你，最多查 4 次）：
+{"action":"tool","tool":"list_regions","args":{"level":"province|city|district","parent":"上一级名称，可空"}}
+  → 列出我们有门店的省/市/区县及门店数。不确定某个地方有没有门店、区县叫什么时，先查它。
+{"action":"tool","tool":"search_stores","args":{"province":"","city":"","district":"","keyword":"","cooperation":"","visit":"any","sort":"priority","limit":10}}
+  → 按条件找门店。省市区做包含匹配（填「重庆」就能匹配「重庆市」）；keyword 匹配店名或地址；
+    cooperation 可填 已合作|已触达未合作|意向中|未触达；
+    visit：any 不限 | never 从未拜访 | stale 30 天以上没去 | recent 14 天内去过；
+    sort：priority 综合优先级（有到期约定、销量偏低、久未拜访的在前）| sales_gap 本期销量低于平时的（差额大的在前）| oldest 最久没去的在前 | recent 最近去过的在前。
+  工具的结果全部来自数据库，门店名、数字只能用工具返回的。
 
-2) 其他问题（销售话术、异议怎么回、某家店的情况、下一步做什么）：
+B) 把最近一次 search_stores 找到的门店以卡片展示给销售（销售可勾选加入今日计划）：
+{"action":"show_stores","reply":"一句话说明你按什么条件挑的、有几家"}
+  找到的门店为空时不要用它，用 answer 如实告诉销售没有，并说明我们有哪些地方的门店（先查 list_regions）。
+
+C) 其他问题（销售话术、异议怎么回、某家店的情况、下一步做什么），或查询之后的文字回答：
 {"action":"answer","reply":"回答正文","suggestions":["最多3个可以接着问的短问题"]}
-- 只能依据「门店资料」和「参考知识」回答，资料里没有的事实不要编造，直接说“目前资料里没有”；
-- 涉及数字、日期、门店名，必须来自资料；
+- 只能依据「门店资料」「参考知识」和工具结果回答，没有的事实不要编造，直接说“目前资料里没有”；
+- 涉及数字、日期、门店名，必须来自资料或工具结果；
 - 话术类问题给出 2-3 条要点和一句参考话术；
+- 销售问我们有没有某地的门店、有哪些区，先用 list_regions 查，不要凭印象回答；
 - 不知道当前是哪家店、问题又和某家店有关时，提醒他先说店名或在顶部选择门店。
 """
 
@@ -101,8 +107,7 @@ def core_date(ms: int) -> str:
 
 
 def build_user_message(db: Session, user: User, question: str, store: Store | None, history: list[dict]) -> str:
-    dists = [d["district"] for d in plans.districts(db, user, limit=40)]
-    parts = ["可选区县：" + ("、".join(dists) if dists else "（暂无）")]
+    parts = []
     if store is not None:
         parts.append("门店资料：\n" + store_context(db, user, store))
     else:
@@ -117,6 +122,41 @@ def build_user_message(db: Session, user: User, question: str, store: Store | No
         parts.append("此前对话：\n" + "\n".join(f"{'销售' if h['role'] == 'user' else '助手'}：{_clip(h['text'], 200)}" for h in history[-6:]))
     parts.append("销售现在说：" + question)
     return _clip("\n\n".join(parts), LIMIT_CHARS * 3)
+
+
+MAX_TOOL_ROUNDS = 4
+SEARCH_ARGS = ("province", "city", "district", "keyword", "cooperation", "visit", "sort")
+
+
+def run_tool(db: Session, user: User, tool: str, args: dict):
+    """执行模型请求的工具；返回 (给模型看的文字, 候选结果或 None)。参数一律校验，不信任模型"""
+    args = args if isinstance(args, dict) else {}
+    if tool == "list_regions":
+        level = str(args.get("level") or "province")
+        rows = plans.regions(db, user, level, str(args.get("parent") or ""))
+        return json.dumps({"level": level, "regions": rows}, ensure_ascii=False), None
+    if tool == "search_stores":
+        kw = {k: str(args.get(k) or "")[:40] for k in SEARCH_ARGS}
+        if kw["visit"] not in ("any", "never", "stale", "recent"):
+            kw["visit"] = "any"
+        if kw["sort"] not in ("priority", "sales_gap", "oldest", "recent"):
+            kw["sort"] = "priority"
+        if kw["cooperation"] not in ("", "已合作", "已触达未合作", "意向中", "未触达"):
+            kw["cooperation"] = ""
+        try:
+            kw["limit"] = max(1, min(int(args.get("limit") or 10), 20))
+        except (TypeError, ValueError):
+            kw["limit"] = 10
+        items = plans.search(db, user, **kw)
+        brief = [{"name": c["name"], "district": c["district"], "reason": c["reason"]} for c in items]
+        return json.dumps({"found": len(items), "stores": brief}, ensure_ascii=False), {"title": _title(kw, len(items)), "items": items, "kind": "search"}
+    return json.dumps({"error": "没有这个工具"}, ensure_ascii=False), None
+
+
+def _title(kw: dict, n: int) -> str:
+    where = "".join(kw[k] for k in ("province", "city", "district")) or "全部地区"
+    sort = {"priority": "优先级从高到低", "sales_gap": "销量低于平时、差额从大到小", "oldest": "最久没去的在前", "recent": "最近去过的在前"}[kw["sort"]]
+    return f"{where}的门店（{n} 家，{sort}）"
 
 
 def parse_reply(text: str) -> dict:
@@ -134,30 +174,51 @@ def chat(db: Session, user: User, question: str, store_id: str | None = None, hi
     st = get_settings()
     question = _clip(question, 500)
     store = find_store(db, user, question, store_id)
-    msg = build_user_message(db, user, question, store, history or [])
-    text, _ = core.call_llm(SYSTEM, msg, st.llm_model, 0.3)
-    try:
-        out = parse_reply(text)
-    except (ValueError, json.JSONDecodeError):
-        return {"text": _clip(text, 800) or "我没听明白，可以换个说法吗？", "suggestions": []}
-    reply = _clip(str(out.get("reply") or ""), 1200)
-    if out.get("action") == "plan":
-        kind = out.get("kind")
-        district = str(out.get("district") or "").strip() or None
-        valid = {d["district"] for d in plans.districts(db, user, limit=200)}
-        if kind == "district" and district not in valid:
-            return {"text": reply + "\n（没找到这个区，下面按销量低于平时的店给你挑。）" if reply else "没找到这个区，我按销量低于平时的店给你挑。", "suggestions": [],
-                    "cands": _cands(db, user, "gap", None)}
-        if kind not in ("district", "gap", "recent", "commitments"):
-            kind = "recent"
-        if district and district not in valid:
-            district = None
-        res = _cands(db, user, kind, district)
-        if not res["items"]:
-            return {"text": (reply + "\n" if reply else "") + "不过没有符合条件的门店，换个条件试试？", "suggestions": []}
-        return {"text": reply or res["title"], "suggestions": [], "cands": res}
-    sugg = [str(s)[:30] for s in (out.get("suggestions") or []) if isinstance(s, str)][:3]
-    return {"text": reply or "目前资料里没有这方面的信息。", "suggestions": sugg}
+    base = build_user_message(db, user, question, store, history or [])
+    transcript, found = "", None
+    for step in range(MAX_TOOL_ROUNDS + 1):
+        text, _ = core.call_llm(SYSTEM, base + transcript, st.llm_model, 0.3)
+        try:
+            out = parse_reply(text)
+        except (ValueError, json.JSONDecodeError):
+            return {"text": _clip(text, 800) or "我没听明白，可以换个说法吗？", "suggestions": []}
+        action = out.get("action")
+        if action == "tool" and step < MAX_TOOL_ROUNDS:
+            tool = str(out.get("tool") or "")
+            result, cands = run_tool(db, user, tool, out.get("args") or {})
+            if cands is not None:
+                found = cands
+            transcript += f"\n\n[你调用了 {tool}，参数 {json.dumps(out.get('args') or {}, ensure_ascii=False)}，结果：{_clip(result, 3000)}]\n请继续，输出下一步 JSON。"
+            continue
+        if action == "tool":  # 工具轮数用完了模型还在查
+            break
+        reply = _clip(str(out.get("reply") or ""), 1200)
+        if action == "show_stores":
+            if found and found["items"]:
+                return {"text": reply or found["title"], "suggestions": [], "cands": found}
+            return {"text": (reply + "\n" if reply else "") + "没有找到符合条件的门店，换个条件试试？", "suggestions": []}
+        if action == "plan":  # 兼容旧格式：直接给 kind
+            return _legacy_plan(db, user, out, reply)
+        sugg = [str(x)[:30] for x in (out.get("suggestions") or []) if isinstance(x, str)][:3]
+        return {"text": reply or "目前资料里没有这方面的信息。", "suggestions": sugg}
+    return {"text": "这个问题我查了几轮还没理清，可以说得再具体一点吗？", "suggestions": []}
+
+
+def _legacy_plan(db: Session, user: User, out: dict, reply: str) -> dict:
+    kind = out.get("kind")
+    district = str(out.get("district") or "").strip() or None
+    valid = {d["district"] for d in plans.districts(db, user, limit=200)}
+    if kind == "district" and district not in valid:
+        return {"text": reply + "\n（没找到这个区，下面按销量低于平时的店给你挑。）" if reply else "没找到这个区，我按销量低于平时的店给你挑。", "suggestions": [],
+                "cands": _cands(db, user, "gap", None)}
+    if kind not in ("district", "gap", "recent", "commitments"):
+        kind = "recent"
+    if district and district not in valid:
+        district = None
+    res = _cands(db, user, kind, district)
+    if not res["items"]:
+        return {"text": (reply + "\n" if reply else "") + "不过没有符合条件的门店，换个条件试试？", "suggestions": []}
+    return {"text": reply or res["title"], "suggestions": [], "cands": res}
 
 
 def _cands(db: Session, user: User, kind: str, district: str | None) -> dict:

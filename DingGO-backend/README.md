@@ -300,7 +300,7 @@ curl -X POST http://服务器IP:8000/admin/visits/12/analysis -H "X-Admin-Token:
 | `GET/POST /todos`、`PATCH /todos/:id`、`POST /todos/:id/done`、`/undo` | 待办：新建（可指派下属）、更新目标/达成/进展、完成、撤销 |
 | `GET /assistant/today?storeId=`、`GET /assistant/brief/:storeId` | 今日待办大卡片、进店前简报（规则计算） |
 | `GET/POST /admin/users`、`PATCH /admin/users/:id`、`POST /admin/users/merge`、`POST /admin/visits/:id/analysis` | 管理：人员、合并账号、写入分析结果（需 `X-Admin-Token`） |
-| `POST /chat` `{question, storeId, history}` | 首页对话：大模型把「今天想去销量低的店」翻译成条件，后端查库返回真实候选门店（`cands`）；或依据门店资料和知识库回答问题。每人每天上限 `DAILY_CHAT_LIMIT`（默认 200） |
+| `POST /chat` `{question, storeId, history}` | 首页对话：大模型通过工具查真实数据——`list_regions`（省/市/区县及门店数）、`search_stores`（按省市区、关键词、合作状态、拜访情况、排序找门店），最多 4 轮，参数全部校验；结果以候选门店卡片（`cands`）返回；或依据门店资料和知识库回答问题，没有的数据如实说没有。每人每天上限 `DAILY_CHAT_LIMIT`（默认 200） |
 | `/practice/*` | 陪练，暂返回 501 |
 | `POST /visits/:id/retry`、`POST /visits/:id/rejudge` | 处理失败后重新处理；把无效录音人工判为有效并分析 |
 | `POST /admin/visits/:id/retry?force=` | 管理员强制重试（无法确认是否已提交转写时用） |

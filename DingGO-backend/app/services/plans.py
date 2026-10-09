@@ -22,9 +22,14 @@ def district_expr():
     return func.coalesce(func.nullif(Store.district, ""), StoreDirectory.district)
 
 
+def _coalesce(col, dcol):
+    return func.coalesce(func.nullif(col, ""), dcol)
+
+
 def _store_rows(db: Session, user: User, district: str | None = None):
     q = (
-        select(Store.id, Store.name, Store.address, Store.cooperation_status, district_expr().label("district"))
+        select(Store.id, Store.name, Store.address, Store.cooperation_status, district_expr().label("district"),
+               _coalesce(Store.province, StoreDirectory.province).label("province"), _coalesce(Store.city, StoreDirectory.city).label("city"))
         .outerjoin(StoreDirectory, Store.directory_id == StoreDirectory.id)
         .where(store_filter(team_ids(db, user)))
     )
@@ -161,8 +166,8 @@ def districts(db: Session, user: User, limit: int = 8) -> list[dict]:
     return sorted(groups.values(), key=lambda g: (-g["mine"], -g["count"]))[:limit]
 
 
-def by_district(db: Session, user: User, district: str, limit: int = 15) -> list[dict]:
-    rows = _store_rows(db, user, district)
+def _rank(db: Session, user: User, rows) -> list[tuple]:
+    """给一批门店打优先级：到期约定 > 销量偏低 > 久未拜访 / 从未拜访。返回 [(分数, 行, 理由, 标签, 距上次天数)]，分数从高到低"""
     last = _last_visits(db, user, [r.id for r in rows])
     commits = _commitments(db, user)
     sales = sales_gaps(db, user)
@@ -189,13 +194,59 @@ def by_district(db: Session, user: User, district: str, limit: int = 15) -> list
             score += min(days, 90)
         else:
             reasons.append(f"{days} 天前去过")
-            score += 0
         if r.cooperation_status == "已合作":
             tags.append("已合作")
             score += 5
         scored.append((score, r, "；".join(reasons), tags, days))
     scored.sort(key=lambda x: -x[0])
-    return [_cand(r, reason, tags, days) for _, r, reason, tags, days in scored[:limit]]
+    return scored
+
+
+def by_district(db: Session, user: User, district: str, limit: int = 15) -> list[dict]:
+    return [_cand(r, reason, tags, days) for _, r, reason, tags, days in _rank(db, user, _store_rows(db, user, district))[:limit]]
+
+
+# ---------------------------------------------------------------- 通用检索（给对话用的工具）
+
+def regions(db: Session, user: User, level: str, parent: str = "") -> list[dict]:
+    """省 / 市 / 区县及门店数。level=province|city|district；parent 是上一级名称（可空）"""
+    key = {"province": "province", "city": "city", "district": "district"}.get(level)
+    if key is None:
+        raise ValueError("level 只能是 province、city、district")
+    parent_key = {"city": "province", "district": "city"}.get(level)
+    counts: Counter = Counter()
+    for r in _store_rows(db, user):
+        if parent and parent_key and parent not in (getattr(r, parent_key) or ""):
+            continue
+        name = getattr(r, key)
+        if name:
+            counts[name] += 1
+    return [{"name": n, "count": c} for n, c in counts.most_common(60)]
+
+
+def search(db: Session, user: User, province: str = "", city: str = "", district: str = "", keyword: str = "",
+           cooperation: str = "", visit: str = "any", sort: str = "priority", limit: int = 15) -> list[dict]:
+    """按条件找门店。province/city/district 做包含匹配（「重庆」能匹配「重庆市」）；
+    visit：any | never（从未拜访）| stale（30 天以上没去）| recent（14 天内去过）；
+    sort：priority（综合优先级）| sales_gap（销量低于平时，差额大的在前）| oldest（最久没去的在前）| recent（最近去过的在前）"""
+    rows = [r for r in _store_rows(db, user)
+            if (not province or province in (r.province or "")) and (not city or city in (r.city or ""))
+            and (not district or district in (r.district or "")) and (not keyword or keyword in (r.name or "") or keyword in (r.address or ""))
+            and (not cooperation or r.cooperation_status == cooperation)]
+    ranked = _rank(db, user, rows)
+    if visit == "never":
+        ranked = [x for x in ranked if x[4] is None]
+    elif visit == "stale":
+        ranked = [x for x in ranked if x[4] is None or x[4] > 30]
+    elif visit == "recent":
+        ranked = [x for x in ranked if x[4] is not None and x[4] <= 14]
+    if sort == "sales_gap":
+        ranked = [x for x in ranked if "销量偏低" in x[3]]
+    elif sort == "oldest":
+        ranked.sort(key=lambda x: (x[4] is not None, -(x[4] or 0)))
+    elif sort == "recent":
+        ranked = sorted((x for x in ranked if x[4] is not None), key=lambda x: x[4])
+    return [_cand(r, reason, tags, days) for _, r, reason, tags, days in ranked[:max(1, min(limit, 30))]]
 
 
 def recent(db: Session, user: User, days: int = 14, limit: int = 10) -> list[dict]:

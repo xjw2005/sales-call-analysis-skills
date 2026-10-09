@@ -64,3 +64,58 @@ def test_bad_json_and_failures_are_handled(client, auth, monkeypatch):
     r = client.post("/chat", json={"question": "你好"}, headers=auth)
     assert r.status_code == 502 and "暂时没有响应" in r.json()["message"]
     assert client.post("/chat", json={"question": ""}, headers=auth).status_code == 422
+
+
+def scripted(monkeypatch, steps, seen=None):
+    """按顺序返回预设的模型输出，模拟多轮工具调用"""
+    it = iter(steps)
+
+    def fake(system, user, model, temperature):
+        if seen is not None:
+            seen.append(user)
+        step = next(it)
+        return json.dumps(step, ensure_ascii=False), {}
+
+    monkeypatch.setattr(core, "call_llm", fake)
+
+
+def test_tool_search_by_province_then_show(client, auth, monkeypatch):
+    make_store(client, auth, "重庆甲", province="重庆市", city="重庆市", district="渝中区")
+    make_store(client, auth, "重庆乙", province="重庆市", city="重庆市", district="九龙坡区")
+    make_store(client, auth, "贵阳丙", province="贵州省", city="贵阳市", district="云岩区")
+    seen = []
+    scripted(monkeypatch, [
+        {"action": "tool", "tool": "search_stores", "args": {"province": "重庆", "visit": "never", "limit": 10}},
+        {"action": "show_stores", "reply": "重庆有 2 家都没去过。"},
+    ], seen)
+    r = client.post("/chat", json={"question": "帮我找重庆地区的门店"}, headers=auth).json()
+    assert r["text"] == "重庆有 2 家都没去过。" and {c["name"] for c in r["cands"]["items"]} == {"重庆甲", "重庆乙"}
+    assert "found" in seen[1] and "重庆甲" in seen[1] and "贵阳丙" not in seen[1]  # 工具结果回传给模型，且只含符合条件的店
+
+
+def test_tool_list_regions_and_honest_empty(client, auth, monkeypatch):
+    make_store(client, auth, "贵阳丙", province="贵州省", city="贵阳市", district="云岩区")
+    seen = []
+    scripted(monkeypatch, [
+        {"action": "tool", "tool": "list_regions", "args": {"level": "province"}},
+        {"action": "tool", "tool": "search_stores", "args": {"province": "重庆"}},
+        {"action": "answer", "reply": "没有重庆的门店，目前有贵州省的。", "suggestions": []},
+    ], seen)
+    r = client.post("/chat", json={"question": "重庆有哪些区"}, headers=auth).json()
+    assert r["text"].startswith("没有重庆") and "cands" not in r
+    assert "贵州省" in seen[1] and '"found": 0' in seen[2]
+
+
+def test_tool_args_are_sanitized_and_loop_is_bounded(client, auth, monkeypatch):
+    make_store(client, auth, "甲", district="渝中区")
+    n = {"c": 0}
+
+    def forever(system, user, model, temperature):
+        n["c"] += 1
+        return json.dumps({"action": "tool", "tool": "search_stores", "args": {"sort": "drop table", "visit": "x", "limit": "abc", "cooperation": "乱写"}}), {}
+
+    monkeypatch.setattr(core, "call_llm", forever)
+    r = client.post("/chat", json={"question": "找店"}, headers=auth).json()
+    assert n["c"] == 5 and "没理清" in r["text"]  # 最多 4 轮工具 + 1 次收尾，不会死循环
+    scripted(monkeypatch, [{"action": "tool", "tool": "rm_rf", "args": {}}, {"action": "answer", "reply": "好", "suggestions": []}])
+    assert client.post("/chat", json={"question": "x"}, headers=auth).json()["text"] == "好"
