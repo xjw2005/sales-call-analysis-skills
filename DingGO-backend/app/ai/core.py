@@ -1272,7 +1272,7 @@ def _strip_knowledge_deep(value: Any) -> Any:
 
 
 
-_DROP = {"response_format": False, "thinking": False}
+_DROP = {"response_format": False, "thinking": False, "stream_options": False}
 
 
 def call_llm(system: str, user: str, model: str, temperature: float) -> tuple[str, dict[str, Any]]:
@@ -1314,6 +1314,67 @@ def call_llm(system: str, user: str, model: str, temperature: float) -> tuple[st
         except (urllib.error.URLError, TimeoutError, KeyError) as exc:
             last = exc
             time.sleep((attempt + 1) * 4)
+    raise RuntimeError(f"模型调用连续失败: {last}")
+
+
+def call_llm_stream(system: str, user: str, model: str, temperature: float):
+    """流式调用：逐段产出 ("delta", 文本)，结束时产出 ("usage", 用量)。
+    只在还没开始产出内容之前才会重试；一旦开始流式输出，中途断开直接抛错。"""
+    key = api_key()
+    if not key:
+        raise RuntimeError("缺少API Key")
+    last: Any = None
+    for attempt in range(3):
+        body: dict[str, Any] = {
+            "model": model, "temperature": temperature, "stream": True,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        }
+        if not _DROP["stream_options"]:
+            body["stream_options"] = {"include_usage": True}
+        if not _DROP["response_format"]:
+            body["response_format"] = {"type": "json_object"}
+        if not _DROP["thinking"]:
+            body["thinking"] = {"type": "disabled"}
+        req = urllib.request.Request(
+            api_url(), data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}", "Accept": "text/event-stream"},
+        )
+        started = False
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+                usage: dict[str, Any] = {}
+                for raw in response:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    if chunk.get("usage"):
+                        usage = chunk["usage"]
+                    for choice in chunk.get("choices") or []:
+                        piece = (choice.get("delta") or {}).get("content")
+                        if piece:
+                            started = True
+                            yield "delta", piece
+                yield "usage", usage
+                return
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:500]
+            if exc.code == 400 and any(p in detail for p in ("response_format", "thinking", "stream_options")):
+                for param in ("response_format", "thinking"):
+                    if param in detail:
+                        _DROP[param] = True
+                if "stream_options" in detail:
+                    _DROP["stream_options"] = True
+                continue
+            last = f"HTTP {exc.code}: {detail}"
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if started:
+                raise RuntimeError(f"模型输出中断: {exc}") from exc
+            last = exc
+        time.sleep((attempt + 1) * 2)
     raise RuntimeError(f"模型调用连续失败: {last}")
 
 

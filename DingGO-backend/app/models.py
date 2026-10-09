@@ -206,6 +206,27 @@ class VisitPlan(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ChatLog(Base):
+    """首页对话的每一次提问：耗时、模型轮数、token 用量，以及销售的「有用 / 没用」反馈（用于优化提示词和控制成本）"""
+
+    __tablename__ = "chat_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    question: Mapped[str] = mapped_column(String(500), default="")
+    reply: Mapped[str] = mapped_column(Text, default="")
+    store_id: Mapped[int | None] = mapped_column(ForeignKey("stores.id"), nullable=True)
+    tools: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{tool, args, ok}]
+    rounds: Mapped[int] = mapped_column(Integer, default=0)  # 模型调用次数
+    tokens: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    first_token_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 流式：多久开始出字
+    error: Mapped[str] = mapped_column(Text, default="")
+    rating: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1 有用 | -1 没用
+    feedback_note: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class VisitPipeline(Base):
     """AI 处理进度（每条有录音的拜访一行）：断点续跑、防重复提交转写。
     stage：queued | asr_submit | asr_poll | roles | validity | analysis | done | failed"""

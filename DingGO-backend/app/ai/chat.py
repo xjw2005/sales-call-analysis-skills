@@ -9,12 +9,13 @@
 
 import json
 import re
+import time
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..models import Store, User
+from ..models import ChatLog, Store, User
 from ..services import plans
 from ..services.access import store_filter, team_ids
 from ..services.playbook import OBJECTIONS
@@ -36,6 +37,12 @@ A) 调用工具查真实数据（一次一个，结果会在下一轮发给你�
     sort：priority 综合优先级（有到期约定、销量偏低、久未拜访的在前）| sales_gap 本期销量低于平时的（差额大的在前）| oldest 最久没去的在前 | recent 最近去过的在前。
   工具的结果全部来自数据库，门店名、数字只能用工具返回的。
 
+{"action":"tool","tool":"add_to_plan","args":{"positions":[1,2],"names":["店名"]}}
+  → 把门店加入销售的「今日计划」。positions 是「刚才给销售看的门店」里的序号（销售说“前三家”“第二家”“都加上”时用序号）；
+    names 是店名（销售直接点名时用）。两者可同时给。只有销售明确说要去、要加入、要安排时才调用，不要擅自加。
+{"action":"tool","tool":"remove_from_plan","args":{"names":["店名"]}}
+  → 把门店从今日计划里移出（销售说“XX不去了”“算了”时）。
+
 B) 把最近一次 search_stores 找到的门店以卡片展示给销售（销售可勾选加入今日计划）：
 {"action":"show_stores","reply":"一句话说明你按什么条件挑的、有几家"}
   找到的门店为空时不要用它，用 answer 如实告诉销售没有，并说明我们有哪些地方的门店（先查 list_regions）。
@@ -45,6 +52,8 @@ C) 其他问题（销售话术、异议怎么回、某家店的情况、下一�
 - 只能依据「门店资料」「参考知识」和工具结果回答，没有的事实不要编造，直接说“目前资料里没有”；
 - 涉及数字、日期、门店名，必须来自资料或工具结果；
 - 话术类问题给出 2-3 条要点和一句参考话术；
+- 「刚才给销售看的门店」和「今日计划」是上下文，销售说“第二家”“前三家”“这几家”指的就是它们；
+- 调用 add_to_plan / remove_from_plan 成功后，用 answer 简短确认（说清加了几家、现在计划共几家）；失败或有歧义，如实告诉销售并让他说清楚；
 - 销售问我们有没有某地的门店、有哪些区，先用 list_regions 查，不要凭印象回答；
 - 不知道当前是哪家店、问题又和某家店有关时，提醒他先说店名或在顶部选择门店。
 """
@@ -106,12 +115,16 @@ def core_date(ms: int) -> str:
     return fmt_date(ms)
 
 
-def build_user_message(db: Session, user: User, question: str, store: Store | None, history: list[dict]) -> str:
+def build_user_message(db: Session, user: User, question: str, store: Store | None, history: list[dict], shown: list[Store] | None = None) -> str:
     parts = []
     if store is not None:
         parts.append("门店资料：\n" + store_context(db, user, store))
     else:
         parts.append("门店资料：当前没有选中门店，问题里也没有提到门店名。")
+    if shown:
+        parts.append("刚才给销售看的门店（按顺序）：\n" + "\n".join(f"{i}. {x.name}" for i, x in enumerate(shown, 1)))
+    plan = plans.today_items(db, user)
+    parts.append("今日计划：" + ("；".join(f"{p['name']}（{'已去' if p['status'] == 'visited' else '待去'}）" for p in plan) if plan else "还没有"))
     core.init_knowledge()
     know = "\n\n".join(b for b in (kb.knowledge_block_for("concerns"), kb.knowledge_block_for("next-action")) if b)
     objections = "\n".join(f"- 客户说「{o['says']}」：{'；'.join(o['points'])}。参考话术：{o['script']}" for o in OBJECTIONS.values())
@@ -128,29 +141,251 @@ MAX_TOOL_ROUNDS = 4
 SEARCH_ARGS = ("province", "city", "district", "keyword", "cooperation", "visit", "sort")
 
 
-def run_tool(db: Session, user: User, tool: str, args: dict):
-    """执行模型请求的工具；返回 (给模型看的文字, 候选结果或 None)。参数一律校验，不信任模型"""
-    args = args if isinstance(args, dict) else {}
-    if tool == "list_regions":
-        level = str(args.get("level") or "province")
-        rows = plans.regions(db, user, level, str(args.get("parent") or ""))
-        return json.dumps({"level": level, "regions": rows}, ensure_ascii=False), None
-    if tool == "search_stores":
-        kw = {k: str(args.get(k) or "")[:40] for k in SEARCH_ARGS}
-        if kw["visit"] not in ("any", "never", "stale", "recent"):
-            kw["visit"] = "any"
-        if kw["sort"] not in ("priority", "sales_gap", "oldest", "recent"):
-            kw["sort"] = "priority"
-        if kw["cooperation"] not in ("", "已合作", "已触达未合作", "意向中", "未触达"):
-            kw["cooperation"] = ""
-        try:
-            kw["limit"] = max(1, min(int(args.get("limit") or 10), 20))
-        except (TypeError, ValueError):
-            kw["limit"] = 10
-        items = plans.search(db, user, **kw)
-        brief = [{"name": c["name"], "district": c["district"], "reason": c["reason"]} for c in items]
-        return json.dumps({"found": len(items), "stores": brief}, ensure_ascii=False), {"title": _title(kw, len(items)), "items": items, "kind": "search"}
-    return json.dumps({"error": "没有这个工具"}, ensure_ascii=False), None
+class ReplyExtractor:
+    """从模型一边生成一边输出的 JSON 里，把 "reply" 字段的文字一个字一个字取出来（流式显示用）。
+    只有动作是 answer / show_stores 时才输出；tool 动作没有要给销售看的文字。"""
+
+    ESC = {"n": "\n", "t": "\t", '"': '"', "\\": "\\", "/": "/", "r": "", "b": "", "f": ""}
+
+    def __init__(self) -> None:
+        self.buf, self.pos, self.action, self.started, self.done, self.sent = "", 0, "", False, False, 0
+
+    def feed(self, piece: str) -> str:
+        self.buf += piece
+        if not self.action:
+            m = re.search(r'"action"\s*:\s*"(\w+)"', self.buf)
+            if m:
+                self.action = m.group(1)
+        if self.action not in ("answer", "show_stores") or self.done:
+            return ""
+        if not self.started:
+            m = re.search(r'"reply"\s*:\s*"', self.buf)
+            if not m:
+                return ""
+            self.started, self.pos = True, m.end()
+        out = []
+        while self.pos < len(self.buf):
+            ch = self.buf[self.pos]
+            if ch == '"':
+                self.done = True
+                break
+            if ch == "\\":
+                if self.pos + 1 >= len(self.buf):
+                    break
+                nxt = self.buf[self.pos + 1]
+                if nxt == "u":
+                    if self.pos + 6 > len(self.buf):
+                        break
+                    try:
+                        out.append(chr(int(self.buf[self.pos + 2:self.pos + 6], 16)))
+                    except ValueError:
+                        pass
+                    self.pos += 6
+                    continue
+                out.append(self.ESC.get(nxt, nxt))
+                self.pos += 2
+                continue
+            out.append(ch)
+            self.pos += 1
+        text = "".join(out)
+        self.sent += len(text)
+        return text
+
+
+def resolve_stores(db: Session, user: User, names: list, shown: list[Store]) -> tuple[list[Store], list[str]]:
+    """把店名解析成门店（只在销售看得到的范围内）。返回 (找到的, 没找到或有歧义的说明)"""
+    ids = team_ids(db, user)
+    out: list[Store] = []
+    problems: list[str] = []
+    for name in names:
+        name = str(name or "").strip()
+        if not name:
+            continue
+        exact = [x for x in shown if x.name == name]
+        if not exact:
+            exact = list(db.scalars(select(Store).where(store_filter(ids), Store.name == name)))
+        if not exact:
+            exact = list(db.scalars(select(Store).where(store_filter(ids), Store.name.contains(name)).limit(6)))
+        if len(exact) == 1:
+            out.append(exact[0])
+        elif not exact:
+            problems.append(f"没有找到「{name}」")
+        else:
+            problems.append(f"「{name}」有多家：" + "、".join(f"{x.name}（{x.code or x.id}）" for x in exact[:5]))
+    return out, problems
+
+
+class Run:
+    """一次提问的执行过程：多轮工具调用 → 回答。emit 用来把进度和文字实时推给前端"""
+
+    def __init__(self, db: Session, user: User, emit=None, shown: list[Store] | None = None):
+        self.db, self.user, self.emit = db, user, emit or (lambda e: None)
+        self.shown = shown or []
+        self.found: dict | None = None
+        self.plan_changed: list[dict] | None = None
+        self.tools: list[dict] = []
+        self.rounds, self.tokens = 0, 0
+        self.first_token_ms: int | None = None
+        self.t0 = time.time()
+
+    # ---- 模型调用（流式 / 非流式）
+    def llm(self, system: str, user_msg: str) -> str:
+        st = get_settings()
+        self.rounds += 1
+        if not self.emit_stream:
+            text, usage = core.call_llm(system, user_msg, st.llm_model, 0.3)
+            self.tokens += int((usage or {}).get("total_tokens") or 0)
+            return text
+        ex, parts = ReplyExtractor(), []
+        for kind, val in core.call_llm_stream(system, user_msg, st.llm_model, 0.3):
+            if kind == "usage":
+                self.tokens += int((val or {}).get("total_tokens") or 0)
+                continue
+            parts.append(val)
+            delta = ex.feed(val)
+            if delta:
+                if self.first_token_ms is None:
+                    self.first_token_ms = int((time.time() - self.t0) * 1000)
+                self.emit({"type": "delta", "text": delta})
+        return "".join(parts)
+
+    emit_stream = False
+
+    # ---- 工具
+    def tool(self, name: str, args: dict) -> str:
+        args = args if isinstance(args, dict) else {}
+        db, user = self.db, self.user
+        ok = True
+        if name == "list_regions":
+            self.emit({"type": "status", "text": "正在查地区…"})
+            level = str(args.get("level") or "province")
+            try:
+                result = json.dumps({"level": level, "regions": plans.regions(db, user, level, str(args.get("parent") or ""))}, ensure_ascii=False)
+            except ValueError as e:
+                ok, result = False, json.dumps({"error": str(e)}, ensure_ascii=False)
+        elif name == "search_stores":
+            self.emit({"type": "status", "text": "正在查门店…"})
+            kw = {k: str(args.get(k) or "")[:40] for k in SEARCH_ARGS}
+            if kw["visit"] not in ("any", "never", "stale", "recent"):
+                kw["visit"] = "any"
+            if kw["sort"] not in ("priority", "sales_gap", "oldest", "recent"):
+                kw["sort"] = "priority"
+            if kw["cooperation"] not in ("", "已合作", "已触达未合作", "意向中", "未触达"):
+                kw["cooperation"] = ""
+            try:
+                kw["limit"] = max(1, min(int(args.get("limit") or 10), 20))
+            except (TypeError, ValueError):
+                kw["limit"] = 10
+            items = plans.search(db, user, **kw)
+            self.found = {"title": _title(kw, len(items)), "items": items, "kind": "search"}
+            self.shown = [x for x in (db.get(Store, int(c["storeId"])) for c in items) if x]
+            result = json.dumps({"found": len(items), "stores": [{"position": i, "name": c["name"], "district": c["district"], "reason": c["reason"]} for i, c in enumerate(items, 1)]}, ensure_ascii=False)
+        elif name == "add_to_plan":
+            self.emit({"type": "status", "text": "正在加入今日计划…"})
+            picked: list[Store] = []
+            problems: list[str] = []
+            for pos in args.get("positions") or []:
+                try:
+                    picked.append(self.shown[int(pos) - 1])
+                except (ValueError, TypeError, IndexError):
+                    problems.append(f"没有第 {pos} 家")
+            more, probs = resolve_stores(db, user, args.get("names") or [], self.shown)
+            picked += more
+            problems += probs
+            if picked:
+                plan = plans.add(db, user, [x.id for x in picked], "chat")
+                self.plan_changed = plan
+                result = json.dumps({"added": [x.name for x in picked], "planTotal": len(plan), "problems": problems}, ensure_ascii=False)
+            else:
+                ok, result = False, json.dumps({"added": [], "problems": problems or ["没有指定要加入的门店"]}, ensure_ascii=False)
+        elif name == "remove_from_plan":
+            self.emit({"type": "status", "text": "正在更新今日计划…"})
+            stores, problems = resolve_stores(db, user, args.get("names") or [], self.shown)
+            current = {int(p["storeId"]): p for p in plans.today_items(db, user)}
+            removed = []
+            for x in stores:
+                p = current.get(x.id)
+                if p and plans.remove(db, user, int(p["id"])):
+                    removed.append(x.name)
+                elif not p:
+                    problems.append(f"「{x.name}」不在今日计划里")
+            self.plan_changed = plans.today_items(db, user)
+            ok = bool(removed)
+            result = json.dumps({"removed": removed, "planTotal": len(self.plan_changed), "problems": problems}, ensure_ascii=False)
+        else:
+            ok, result = False, json.dumps({"error": "没有这个工具"}, ensure_ascii=False)
+        self.tools.append({"tool": name, "args": args, "ok": ok})
+        return result
+
+    def run(self, question: str, store: Store | None, history: list[dict]) -> dict:
+        base = build_user_message(self.db, self.user, question, store, history, self.shown)
+        transcript = ""
+        self.emit({"type": "status", "text": "思考中…"})
+        for step in range(MAX_TOOL_ROUNDS + 1):
+            text = self.llm(SYSTEM, base + transcript)
+            try:
+                out = parse_reply(text)
+            except (ValueError, json.JSONDecodeError):
+                return {"text": _clip(text, 800) or "我没听明白，可以换个说法吗？", "suggestions": []}
+            action = out.get("action")
+            if action == "tool" and step < MAX_TOOL_ROUNDS:
+                name = str(out.get("tool") or "")
+                result = self.tool(name, out.get("args") or {})
+                transcript += f"\n\n[你调用了 {name}，参数 {json.dumps(out.get('args') or {}, ensure_ascii=False)}，结果：{_clip(result, 3000)}]\n请继续，输出下一步 JSON。"
+                continue
+            if action == "tool":
+                break
+            reply = _clip(str(out.get("reply") or ""), 1200)
+            if action == "show_stores":
+                if self.found and self.found["items"]:
+                    res = {"text": reply or self.found["title"], "suggestions": [], "cands": self.found}
+                else:
+                    res = {"text": (reply + "\n" if reply else "") + "没有找到符合条件的门店，换个条件试试？", "suggestions": []}
+            elif action == "plan":
+                res = _legacy_plan(self.db, self.user, out, reply)
+            else:
+                sugg = [str(x)[:30] for x in (out.get("suggestions") or []) if isinstance(x, str)][:3]
+                res = {"text": reply or "目前资料里没有这方面的信息。", "suggestions": sugg}
+            if self.plan_changed is not None:
+                res["plan"] = self.plan_changed
+            return res
+        return {"text": "这个问题我查了几轮还没理清，可以说得再具体一点吗？", "suggestions": []}
+
+
+def shown_stores(db: Session, user: User, context: dict | None) -> list[Store]:
+    """前端回传的「刚给销售看的门店」：只认销售有权限看的"""
+    out: list[Store] = []
+    ids = team_ids(db, user)
+    for item in ((context or {}).get("shown") or [])[:20]:
+        sid = str((item or {}).get("storeId", ""))
+        if sid.isdigit():
+            st = db.scalars(select(Store).where(Store.id == int(sid), store_filter(ids))).first()
+            if st:
+                out.append(st)
+    return out
+
+
+def chat(db: Session, user: User, question: str, store_id: str | None = None, history: list[dict] | None = None,
+         context: dict | None = None, emit=None) -> dict:
+    """一次提问。emit 不为空时走流式：进度和回答文字实时推给 emit；返回值始终是完整结果。
+    每次提问都记一条 chat_logs（耗时、模型轮数、token、用到的工具、出错信息）。"""
+    question = _clip(question, 500)
+    store = find_store(db, user, question, store_id)
+    run = Run(db, user, emit, shown_stores(db, user, context))
+    run.emit_stream = emit is not None
+    error, result = "", {"text": "", "suggestions": []}
+    try:
+        result = run.run(question, store, history or [])
+    except Exception as e:  # noqa: BLE001 记下来再抛给上层处理
+        error = str(e)[:500]
+        raise
+    finally:
+        log = ChatLog(user_id=user.id, question=question, reply=result.get("text", "")[:2000], store_id=store.id if store else None, tools=run.tools or None,
+                      rounds=run.rounds, tokens=run.tokens, duration_ms=int((time.time() - run.t0) * 1000), first_token_ms=run.first_token_ms, error=error)
+        db.add(log)
+        db.commit()
+        result["logId"] = log.id
+    return result
 
 
 def _title(kw: dict, n: int) -> str:
@@ -168,40 +403,6 @@ def parse_reply(text: str) -> dict:
     if not isinstance(value, dict):
         raise ValueError("模型返回的不是对象")
     return value
-
-
-def chat(db: Session, user: User, question: str, store_id: str | None = None, history: list[dict] | None = None) -> dict:
-    st = get_settings()
-    question = _clip(question, 500)
-    store = find_store(db, user, question, store_id)
-    base = build_user_message(db, user, question, store, history or [])
-    transcript, found = "", None
-    for step in range(MAX_TOOL_ROUNDS + 1):
-        text, _ = core.call_llm(SYSTEM, base + transcript, st.llm_model, 0.3)
-        try:
-            out = parse_reply(text)
-        except (ValueError, json.JSONDecodeError):
-            return {"text": _clip(text, 800) or "我没听明白，可以换个说法吗？", "suggestions": []}
-        action = out.get("action")
-        if action == "tool" and step < MAX_TOOL_ROUNDS:
-            tool = str(out.get("tool") or "")
-            result, cands = run_tool(db, user, tool, out.get("args") or {})
-            if cands is not None:
-                found = cands
-            transcript += f"\n\n[你调用了 {tool}，参数 {json.dumps(out.get('args') or {}, ensure_ascii=False)}，结果：{_clip(result, 3000)}]\n请继续，输出下一步 JSON。"
-            continue
-        if action == "tool":  # 工具轮数用完了模型还在查
-            break
-        reply = _clip(str(out.get("reply") or ""), 1200)
-        if action == "show_stores":
-            if found and found["items"]:
-                return {"text": reply or found["title"], "suggestions": [], "cands": found}
-            return {"text": (reply + "\n" if reply else "") + "没有找到符合条件的门店，换个条件试试？", "suggestions": []}
-        if action == "plan":  # 兼容旧格式：直接给 kind
-            return _legacy_plan(db, user, out, reply)
-        sugg = [str(x)[:30] for x in (out.get("suggestions") or []) if isinstance(x, str)][:3]
-        return {"text": reply or "目前资料里没有这方面的信息。", "suggestions": sugg}
-    return {"text": "这个问题我查了几轮还没理清，可以说得再具体一点吗？", "suggestions": []}
 
 
 def _legacy_plan(db: Session, user: User, out: dict, reply: str) -> dict:

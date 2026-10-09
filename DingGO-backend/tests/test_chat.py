@@ -119,3 +119,102 @@ def test_tool_args_are_sanitized_and_loop_is_bounded(client, auth, monkeypatch):
     assert n["c"] == 5 and "没理清" in r["text"]  # 最多 4 轮工具 + 1 次收尾，不会死循环
     scripted(monkeypatch, [{"action": "tool", "tool": "rm_rf", "args": {}}, {"action": "answer", "reply": "好", "suggestions": []}])
     assert client.post("/chat", json={"question": "x"}, headers=auth).json()["text"] == "好"
+
+
+# ---------------------------------------------------------------- 上下文、计划工具、流式、日志与反馈
+
+from app.ai.chat import ReplyExtractor
+from app.db import SessionLocal
+from app.models import ChatLog
+
+
+def test_reply_extractor_streams_only_answer_text_across_chunk_boundaries():
+    full = '{"action":"answer","reply":"第一行\\n带\\"引号\\"和中文，\\u4f60好","suggestions":["a"]}'
+    for size in (1, 3, 7, 50):
+        ex = ReplyExtractor()
+        out = "".join(ex.feed(full[i:i + size]) for i in range(0, len(full), size))
+        assert out == '第一行\n带"引号"和中文，你好', size
+    tool = ReplyExtractor()
+    assert tool.feed('{"action":"tool","tool":"search_stores","args":{"reply":"x"}}') == ""  # 工具调用不输出文字
+    late = ReplyExtractor()  # reply 写在 action 前面：等 action 出现后再一次性补出
+    assert late.feed('{"reply":"先写了回复","action"') == "" and late.feed(':"answer"}') == "先写了回复"
+
+
+def test_context_shown_stores_and_plan_tools(client, auth, monkeypatch):
+    a = make_store(client, auth, "甲店", district="渝中区")
+    b = make_store(client, auth, "乙店", district="渝中区")
+    c = make_store(client, auth, "丙店", district="渝中区")
+    seen = []
+    scripted(monkeypatch, [
+        {"action": "tool", "tool": "add_to_plan", "args": {"positions": [1, 3]}},
+        {"action": "answer", "reply": "已把甲店、丙店加入今天。", "suggestions": []},
+    ], seen)
+    ctx = {"shown": [{"storeId": a["id"]}, {"storeId": b["id"]}, {"storeId": c["id"]}]}
+    r = client.post("/chat", json={"question": "把第一家和第三家加进今天", "context": ctx}, headers=auth).json()
+    assert "1. 甲店" in seen[0] and "3. 丙店" in seen[0]  # 刚给看的门店带进了上下文
+    assert [p["name"] for p in r["plan"]] == ["甲店", "丙店"] and r["logId"]
+    assert [p["name"] for p in client.get("/plans/today", headers=auth).json()] == ["甲店", "丙店"]
+    seen.clear()
+    scripted(monkeypatch, [
+        {"action": "tool", "tool": "remove_from_plan", "args": {"names": ["甲店"]}},
+        {"action": "tool", "tool": "add_to_plan", "args": {"names": ["乙店", "不存在的店"]}},
+        {"action": "answer", "reply": "好了", "suggestions": []},
+    ], seen)
+    r = client.post("/chat", json={"question": "甲店不去了，加乙店"}, headers=auth).json()
+    assert "今日计划：甲店（待去）；丙店（待去）" in seen[0]  # 今天的计划也在上下文里
+    assert '"removed": ["甲店"]' in seen[1] and "没有找到「不存在的店」" in seen[2]
+    assert [p["name"] for p in r["plan"]] == ["丙店", "乙店"]
+
+
+def test_add_to_plan_cannot_reach_invisible_stores(client, auth, monkeypatch):
+    from .conftest import login
+    a = make_store(client, auth, "甲店", district="渝中区")
+    bob = login(client, "bob", "小李")
+    scripted(monkeypatch, [
+        {"action": "tool", "tool": "add_to_plan", "args": {"names": ["甲店"], "positions": [1]}},
+        {"action": "answer", "reply": "没加上", "suggestions": []},
+    ])
+    r = client.post("/chat", json={"question": "加甲店", "context": {"shown": [{"storeId": a["id"]}]}}, headers=bob).json()
+    assert "plan" not in r and client.get("/plans/today", headers=bob).json() == []
+
+
+def test_stream_endpoint_events_log_and_feedback(client, auth, monkeypatch):
+    make_store(client, auth, "甲店", district="渝中区")
+    pieces = ['{"action":"tool","tool":"search_stores","args":{"district":"渝中"}}'], ['{"action":"show_stores","re', 'ply":"找到 1 家，', '先看这家。"}']
+    calls = iter(pieces)
+
+    def fake_stream(system, user, model, temperature):
+        for p in next(calls):
+            yield "delta", p
+        yield "usage", {"total_tokens": 100}
+
+    monkeypatch.setattr(core, "call_llm_stream", fake_stream)
+    r = client.post("/chat/stream", json={"question": "渝中区有什么店"}, headers=auth)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/x-ndjson")
+    events = [json.loads(x) for x in r.text.splitlines() if x.strip()]
+    types = [e["type"] for e in events]
+    assert types[0] == "status" and "delta" in types and types[-1] == "final"
+    assert "".join(e["text"] for e in events if e["type"] == "delta") == "找到 1 家，先看这家。"
+    final = events[-1]
+    assert final["cands"]["items"][0]["name"] == "甲店" and final["logId"]
+    with SessionLocal() as db:
+        log = db.get(ChatLog, final["logId"])
+        assert log.rounds == 2 and log.tokens == 200 and log.tools[0]["tool"] == "search_stores" and log.first_token_ms is not None and log.error == ""
+    assert client.post("/chat/feedback", json={"logId": final["logId"], "rating": -1, "note": "没找到想要的"}, headers=auth).json() is True
+    with SessionLocal() as db:
+        assert db.get(ChatLog, final["logId"]).rating == -1
+    from .conftest import login
+    assert client.post("/chat/feedback", json={"logId": final["logId"], "rating": 1}, headers=login(client, "bob")).status_code == 404
+    assert client.post("/chat/feedback", json={"logId": final["logId"], "rating": 5}, headers=auth).status_code == 422
+
+
+def test_stream_failure_becomes_error_event_and_is_not_leaky(client, auth, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("secret internals")
+        yield
+
+    monkeypatch.setattr(core, "call_llm_stream", boom)
+    r = client.post("/chat/stream", json={"question": "你好"}, headers=auth)
+    events = [json.loads(x) for x in r.text.splitlines() if x.strip()]
+    assert events[-1] == {"type": "error", "message": "AI 暂时没有响应，请稍后再试"}
+    assert "secret" not in r.text
