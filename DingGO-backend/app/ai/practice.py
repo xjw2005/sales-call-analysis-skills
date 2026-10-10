@@ -1,6 +1,6 @@
 """AI 陪练：大模型扮演母婴店老板，销售逐句回答；结束后按场景的评分维度点评。
 
-场景、客户台词脚本（模型失败时兜底）、评分维度和参考话术是人工写好的；模型只负责「接着演」和「按维度打分写评语」。
+场景、客户台词脚本（只有开场白用，后面的台词由模型现场生成）、评分维度和参考话术是人工写好的；模型只负责「接着演」和「按维度打分写评语」。
 """
 
 import json
@@ -14,7 +14,7 @@ from . import core
 
 log = logging.getLogger("dinggo.ai")
 
-# dims：(维度名, 打分标准)；lines：客户台词脚本，第一句是开场，后面的在模型失败时兜底
+# dims：(维度名, 打分标准)；lines：客户台词脚本，第一句是开场白，条数决定轮数，其余台词只作参考，不会直接用
 SCENARIOS: list[dict] = [
     {
         "id": "opening", "title": "首访开场", "concern": None, "level": "入门",
@@ -135,17 +135,17 @@ def start(db: Session, user: User, scenario_id: str) -> dict:
 
 
 def _customer_reply(sc: dict, turns: list[dict], answered: int, total: int) -> tuple[str, int]:
-    """返回 (客户下一句, token)。模型出错时退回人工写好的台词，保证练习不中断。"""
+    """返回 (客户下一句, token)。模型失败直接抛错：不能悄悄换成写好的台词，否则练习看起来正常、其实没有 AI 参与。"""
     system = CUSTOMER_SYSTEM.format(title=sc["title"], persona=sc["persona"], total=total, round=answered + 1)
+    raw, usage = core.call_llm(system, _transcript(turns) + "\n请输出老板的下一句。", _model(), 0.7)
     try:
-        raw, usage = core.call_llm(system, _transcript(turns) + "\n请输出老板的下一句。", _model(), 0.7)
-        text = str(json.loads(raw).get("reply") or "").strip().removeprefix("客户：").removeprefix("老板：").strip()
-        if not text:
-            raise ValueError("empty reply")
-        return text[:120], int((usage or {}).get("total_tokens") or 0)
-    except Exception:  # noqa: BLE001
-        log.exception("practice customer reply failed, using scripted line")
-        return sc["lines"][min(answered, len(sc["lines"]) - 1)], 0
+        text = str(json.loads(raw).get("reply") or "").strip()
+    except (ValueError, AttributeError) as e:
+        raise RuntimeError(f"客户台词格式不对：{raw[:80]}") from e
+    text = text.removeprefix("客户：").removeprefix("老板：").strip()
+    if not text:
+        raise RuntimeError("客户台词为空")
+    return text[:120], int((usage or {}).get("total_tokens") or 0)
 
 
 def turn(db: Session, row: PracticeSession, text: str) -> dict:

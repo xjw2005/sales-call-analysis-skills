@@ -57,17 +57,25 @@ def test_full_run_scores_and_saves(client, auth, monkeypatch):
     assert client.post("/practice/turn", json={"sessionId": sid, "text": "再来"}, headers=auth).status_code == 400
 
 
-def test_customer_falls_back_to_script_when_model_fails(client, auth, monkeypatch):
+def test_model_failure_is_visible_not_silently_scripted(client, auth, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("HTTP 429")
 
     monkeypatch.setattr(core, "call_llm", boom)
     sid = start(client, auth).json()["sessionId"]
-    r = client.post("/practice/turn", json={"sessionId": sid, "text": "您说得对"}, headers=auth).json()
-    assert r["reply"] == practice.BY_ID["price"]["lines"][1] and r["finished"] is False
-    # 点评没有兜底：模型失败给明白话，会话保持进行中，可以再点
-    r = client.post("/practice/finish", json={"sessionId": sid}, headers=auth)
-    assert r.status_code == 502 and "AI" in r.json()["message"]
+    r = client.post("/practice/turn", json={"sessionId": sid, "text": "您说得对"}, headers=auth)
+    assert r.status_code == 502 and "AI" in r.json()["message"]  # 报错，不退回写好的台词
+    with SessionLocal() as db:
+        row = db.get(PracticeSession, sid)
+        assert len(row.turns) == 1 and row.tokens == 0  # 这句回答没有记下，重发即可
+    stub(monkeypatch, customer="那你说说怎么保证？")
+    assert client.post("/practice/turn", json={"sessionId": sid, "text": "您说得对"}, headers=auth).json()["reply"] == "那你说说怎么保证？"
+    # 模型返回的不是约定格式也按失败处理
+    monkeypatch.setattr(core, "call_llm", lambda *a, **k: ("好的，我知道了", {}))
+    assert client.post("/practice/turn", json={"sessionId": sid, "text": "再答一句"}, headers=auth).status_code == 502
+    # 点评失败：会话保持进行中，可以重试
+    monkeypatch.setattr(core, "call_llm", boom)
+    assert client.post("/practice/finish", json={"sessionId": sid}, headers=auth).status_code == 502
     with SessionLocal() as db:
         assert db.get(PracticeSession, sid).status == "active"
 
