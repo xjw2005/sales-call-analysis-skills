@@ -94,6 +94,7 @@
 /* 陪练状态条 + 输入条 */
 .practice-bar { flex-shrink: 0; margin: 8rpx 32rpx 0; background: #eeedfd; color: #5b55e8; border-radius: 20rpx; padding: 14rpx 24rpx; font-size: 24rpx; }
 .pb-exit { font-weight: 600; }
+.pb-gap { margin-left: 28rpx; color: #8a8fb0; }
 .input-bar { flex-shrink: 0; margin: 12rpx 32rpx 0; height: 104rpx; background: #fff; border-radius: 52rpx; padding: 0 12rpx; box-shadow: 0 8rpx 32rpx rgba(28,27,75,0.08); }
 .rec-btn { display: flex; align-items: center; background: #5b55e8; color: #fff; border-radius: 999rpx; height: 76rpx; padding: 0 24rpx 0 16rpx; font-size: 26rpx; flex-shrink: 0; }
 .rec-icon { width: 36rpx; height: 36rpx; margin-right: 6rpx; }

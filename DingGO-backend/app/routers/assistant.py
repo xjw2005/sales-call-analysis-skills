@@ -217,7 +217,9 @@ def practice_start(body: PracticeStartIn, db: Session = Depends(get_db), user: U
     used = db.scalar(select(func.count()).select_from(PracticeSession).where(PracticeSession.user_id == user.id, PracticeSession.created_at >= since)) or 0
     if used >= get_settings().daily_practice_limit:
         raise HTTPException(status_code=429, detail="今天的陪练次数已用完，请明天再来")
-    return ai_practice.start(db, user, body.scenarioId)  # 开场白是写好的，不调用大模型
+    if not worker.configured():
+        raise HTTPException(status_code=503, detail="AI 服务还没有配置，请联系管理员")
+    return _practice_llm(user, lambda: ai_practice.start(db, user, body.scenarioId))  # 开场白由模型生成
 
 
 @router.post("/practice/turn")

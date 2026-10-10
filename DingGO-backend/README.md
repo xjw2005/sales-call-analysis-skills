@@ -362,16 +362,16 @@ alembic upgrade head && uvicorn app.main:app --reload   # 默认用 ./data/dev.d
 
 ## AI 陪练
 
-大模型扮演母婴店老板，销售逐句回答，答满轮数后按场景的评分维度点评。场景、客户的性格设定、兜底台词、评分维度和参考话术都写在 `app/ai/practice.py`，要加场景只改这个文件。
+大模型扮演母婴店老板，销售逐句回答，答满轮数后按场景的评分维度点评。场景、老板的设定、开场切入角度、评分维度和参考话术都写在 `app/ai/practice.py`，要加场景只改这个文件。
 
 | 接口 | 作用 |
 |---|---|
 | `GET /practice/scenarios` | 场景列表（id、标题、对应的顾虑、难度、说明） |
-| `POST /practice/start {scenarioId}` | 开始一次练习，返回 `sessionId` 和客户的开场白（写好的，不调用模型） |
-| `POST /practice/turn {sessionId, text}` | 销售回答一句，返回客户下一句；答完最后一轮返回 `finished: true` |
-| `POST /practice/finish {sessionId}` | 生成点评：总分、每个维度的分数和评语、参考话术。重复调用返回已保存的结果 |
+| `POST /practice/start {scenarioId}` | 开始一次练习，返回 `sessionId` 和老板的开场白（模型按随机的性格和切入角度生成，每次不同） |
+| `POST /practice/turn {sessionId, text}` | 销售回答一句，返回老板下一句；老板谈出结论（至少 `PRACTICE_MIN_ROUNDS` 轮后）或到 `PRACTICE_MAX_ROUNDS` 轮，返回 `finished: true`，`reply` 是收尾的话 |
+| `POST /practice/finish {sessionId}` | 生成点评：总分、每个维度的分数和评语、参考话术。至少答过一句即可，销售可随时主动结束；重复调用返回已保存的结果 |
 
 - 练习存在 `practice_sessions` 表（迁移 0008），只有本人能访问，别人的 sessionId 返回 404。
-- 客户台词和点评都由模型生成，只有开场白是写好的；模型失败时返回 502（不会悄悄换成脚本），这句回答不记录，重发即可；点评失败练习保持进行中，可以重试。
+- 开场白、老板台词和点评都由模型生成；轮数 3~8 轮自适应（默认，可用 `PRACTICE_MIN_ROUNDS`、`PRACTICE_MAX_ROUNDS` 调）；模型失败时返回 502（不会悄悄换成脚本），这句回答不记录，重发即可；点评失败练习保持进行中，可以重试。
 - 点评的分数夹在 1~5，缺维度或格式不对的输出不会保存。销售的回答只作为对话内容传给模型，不当指令。
 - 每人每天最多开始 `DAILY_PRACTICE_LIMIT`（默认 30）次；`turn`、`finish` 和对话共用每分钟频率与并发名额。

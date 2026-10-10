@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     worker_threads: int = 2
     daily_visit_limit: int = 30
     daily_chat_limit: int = 200  # 每人每天最多提问次数
+    practice_min_rounds: int = 3  # 陪练最少几轮才允许老板收尾
+    practice_max_rounds: int = 8  # 陪练最多几轮，到了老板必须收尾
     daily_practice_limit: int = 30  # 每人每天最多开始几次陪练
     chat_per_minute: int = 10  # 每人每分钟最多提问次数
     chat_max_concurrent: int = 6  # 同时在向大模型提问的人数上限，超过的排队

@@ -270,11 +270,14 @@ Page({
   async startScenario(scenarioId) {
     if (this.data.practice) this.exitPractice();
     let res;
+    this.setData({ thinking: true });
     try {
       res = await practice.start(scenarioId);
     } catch (err) {
+      this.setData({ thinking: false });
       return wx.showToast({ title: err.message, icon: 'none' });
     }
+    this.setData({ thinking: false });
     this.setData({
       practice: { sessionId: res.sessionId, scenarioId, title: res.title, round: 1, total: res.totalRounds },
       placeholder: '你会怎么回答老板？',
@@ -294,11 +297,16 @@ Page({
       this.setData({ thinking: false });
       return wx.showToast({ title: err.message, icon: 'none' });
     }
+    if (res.reply) this.push({ type: 'customer', text: res.reply }); // 老板收尾的话也要显示出来
     if (!res.finished) {
       this.setData({ thinking: false, 'practice.round': p.round + 1 });
-      this.push({ type: 'customer', text: res.reply });
       return;
     }
+    this.finishPractice();
+  },
+  // 销售随时可以主动结束，直接看点评（至少要先答一句）
+  endPractice() {
+    if (this.data.thinking || !this.data.practice) return;
     this.finishPractice();
   },
   async finishPractice() {

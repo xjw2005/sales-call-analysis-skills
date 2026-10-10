@@ -244,8 +244,11 @@
 
   <!-- 陪练进行中提示条 -->
   <view wx:if="{{practice}}" class="practice-bar row between">
-    <text>🎯 陪练中：{{practice.title}} · 第 {{practice.round}}/{{practice.total}} 轮</text>
-    <text class="pb-exit" bindtap="exitPractice">退出</text>
+    <text>🎯 {{practice.title}} · 第 {{practice.round}} 轮（最多 {{practice.total}} 轮）</text>
+    <view class="row">
+      <text class="pb-exit" bindtap="endPractice">结束并点评</text>
+      <text class="pb-exit pb-gap" bindtap="exitPractice">退出</text>
+    </view>
   </view>
 
   <!-- 底部输入条 -->
