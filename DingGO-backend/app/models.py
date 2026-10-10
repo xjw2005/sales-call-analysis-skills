@@ -293,6 +293,23 @@ class ChatLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
+class PracticeSession(Base):
+    """AI 陪练的一次练习：大模型扮演客户，销售逐句回答，结束后按场景的评分维度点评。只有本人能看到。"""
+
+    __tablename__ = "practice_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    scenario_id: Mapped[str] = mapped_column(String(40))
+    total_rounds: Mapped[int] = mapped_column(Integer, default=4)
+    turns: Mapped[list] = mapped_column(JSON, default=list)  # [{"role":"customer"|"sales","text":"…"}]
+    status: Mapped[str] = mapped_column(String(12), default="active")  # active | finished
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    tokens: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class VisitPipeline(Base):
     """AI 处理进度（每条有录音的拜访一行）：断点续跑、防重复提交转写。
     stage：queued | asr_submit | asr_poll | roles | validity | analysis | done | failed"""

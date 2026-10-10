@@ -269,7 +269,12 @@ Page({
   },
   async startScenario(scenarioId) {
     if (this.data.practice) this.exitPractice();
-    const res = await practice.start(scenarioId);
+    let res;
+    try {
+      res = await practice.start(scenarioId);
+    } catch (err) {
+      return wx.showToast({ title: err.message, icon: 'none' });
+    }
     this.setData({
       practice: { sessionId: res.sessionId, scenarioId, title: res.title, round: 1, total: res.totalRounds },
       placeholder: '你会怎么回答老板？',
@@ -278,18 +283,36 @@ Page({
   },
   async practiceTurn(text) {
     const p = this.data.practice;
+    // 上一次点评没生成成功：再发一句只是重新点评，不再当作新回答
+    if (p.pendingFinish) return this.finishPractice();
     this.push({ type: 'user', text });
     this.setData({ thinking: true });
-    const res = await practice.turn(p.sessionId, text);
+    let res;
+    try {
+      res = await practice.turn(p.sessionId, text);
+    } catch (err) {
+      this.setData({ thinking: false });
+      return wx.showToast({ title: err.message, icon: 'none' });
+    }
     if (!res.finished) {
       this.setData({ thinking: false, 'practice.round': p.round + 1 });
       this.push({ type: 'customer', text: res.reply });
       return;
     }
-    const result = await practice.finish(p.sessionId);
-    this.setData({ thinking: false });
-    this.push({ type: 'result', result: { ...result, scenarioId: p.scenarioId, title: p.title } });
-    this.exitPractice();
+    this.finishPractice();
+  },
+  async finishPractice() {
+    const p = this.data.practice;
+    this.setData({ thinking: true });
+    try {
+      const result = await practice.finish(p.sessionId);
+      this.setData({ thinking: false });
+      this.push({ type: 'result', result: { ...result, scenarioId: p.scenarioId, title: p.title } });
+      this.exitPractice();
+    } catch (err) {
+      this.setData({ thinking: false, 'practice.pendingFinish': true, placeholder: '点评没有生成，发任意一句重试' });
+      wx.showToast({ title: err.message, icon: 'none' });
+    }
   },
   exitPractice() {
     if (!this.data.practice) return;

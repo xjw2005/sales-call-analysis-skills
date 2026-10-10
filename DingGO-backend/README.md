@@ -2,7 +2,7 @@
 
 Python + FastAPI + MySQL，给小程序 `DingGO-AI-Saler` 提供真实数据，替代飞书多维表（01 门店主档、02 门店拜访记录）。
 第一期只做基础功能：登录、门店、拜访（含无录音拜访）、录音上传、费用确认、待办（含月度目标）、今日待办、进店前简报、旧数据导入。
-**AI 录音链路（转写 + 分析）已接入**，见「AI 录音链路」一节，配置密钥后启用；首页对话已接入（`POST /chat`），陪练尚未接入（返回 501）。
+**AI 录音链路（转写 + 分析）已接入**，见「AI 录音链路」一节，配置密钥后启用；首页对话已接入（`POST /chat`），AI 陪练已接入（见「AI 陪练」一节）。
 
 ## 上线顺序总览
 
@@ -344,7 +344,7 @@ curl -X POST http://服务器IP:8000/admin/visits/12/analysis -H "X-Admin-Token:
 | `GET /assistant/today?storeId=`、`GET /assistant/brief/:storeId` | 今日待办大卡片、进店前简报（规则计算） |
 | `GET/POST /admin/users`、`PATCH /admin/users/:id`、`POST /admin/users/merge`、`POST /admin/visits/:id/analysis` | 管理：人员、合并账号、写入分析结果（需 `X-Admin-Token`） |
 | `POST /chat` `{question, storeId, history}` | 首页对话：大模型通过工具查真实数据——`list_regions`（省/市/区县及门店数）、`search_stores`（按省市区、关键词、合作状态、拜访情况、排序找门店），最多 4 轮，参数全部校验；结果以候选门店卡片（`cands`）返回；或依据门店资料和知识库回答问题，没有的数据如实说没有。每人每天上限 `DAILY_CHAT_LIMIT`（默认 200） |
-| `/practice/*` | 陪练，暂返回 501 |
+| `GET /practice/scenarios`、`POST /practice/start`、`/practice/turn`、`/practice/finish` | AI 陪练，见「AI 陪练」一节 |
 | `POST /visits/:id/retry`、`POST /visits/:id/rejudge` | 处理失败后重新处理；把无效录音人工判为有效并分析 |
 | `POST /admin/visits/:id/retry?force=` | 管理员强制重试（无法确认是否已提交转写时用） |
 
@@ -358,3 +358,20 @@ TEST_DATABASE_URL='mysql+pymysql://用户:密码@127.0.0.1:3306/测试库?charse
 alembic upgrade head && uvicorn app.main:app --reload   # 默认用 ./data/dev.db
 ```
 改了 `app/models.py` 后生成迁移：`alembic revision --autogenerate -m "说明"`。
+
+
+## AI 陪练
+
+大模型扮演母婴店老板，销售逐句回答，答满轮数后按场景的评分维度点评。场景、客户的性格设定、兜底台词、评分维度和参考话术都写在 `app/ai/practice.py`，要加场景只改这个文件。
+
+| 接口 | 作用 |
+|---|---|
+| `GET /practice/scenarios` | 场景列表（id、标题、对应的顾虑、难度、说明） |
+| `POST /practice/start {scenarioId}` | 开始一次练习，返回 `sessionId` 和客户的开场白（写好的，不调用模型） |
+| `POST /practice/turn {sessionId, text}` | 销售回答一句，返回客户下一句；答完最后一轮返回 `finished: true` |
+| `POST /practice/finish {sessionId}` | 生成点评：总分、每个维度的分数和评语、参考话术。重复调用返回已保存的结果 |
+
+- 练习存在 `practice_sessions` 表（迁移 0008），只有本人能访问，别人的 sessionId 返回 404。
+- 客户台词模型失败时退回写好的脚本，练习不中断；点评失败返回 502，练习保持进行中，可以重试。
+- 点评的分数夹在 1~5，缺维度或格式不对的输出不会保存。销售的回答只作为对话内容传给模型，不当指令。
+- 每人每天最多开始 `DAILY_PRACTICE_LIMIT`（默认 30）次；`turn`、`finish` 和对话共用每分钟频率与并发名额。

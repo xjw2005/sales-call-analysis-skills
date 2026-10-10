@@ -13,11 +13,12 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import current_user
 from ..ai import chat as ai_chat
+from ..ai import practice as ai_practice
 from ..ai import worker
 from ..config import get_settings
 from ..db import SessionLocal
 from ..ai.limits import Rejected, limiter
-from ..models import ChatLog, ChatMessage, ChatSession, User, utcnow
+from ..models import ChatLog, ChatMessage, ChatSession, PracticeSession, User, utcnow
 from ..services.timeutil import to_ms
 from ..services.access import visible_store
 from ..services.assistant import brief, today_panel
@@ -165,6 +166,73 @@ def chat_feedback(body: FeedbackIn, db: Session = Depends(get_db), user: User = 
     return True
 
 
-@router.api_route("/practice/{path:path}", methods=["GET", "POST"])
-def practice(path: str, user: User = Depends(current_user)):
-    raise HTTPException(status_code=501, detail="AI 陪练尚未接入")
+class PracticeStartIn(BaseModel):
+    scenarioId: str
+
+
+class PracticeTurnIn(BaseModel):
+    sessionId: int
+    text: str = Field(min_length=1, max_length=500)
+
+
+class PracticeFinishIn(BaseModel):
+    sessionId: int
+
+
+def _practice_session(db: Session, user: User, session_id: int) -> PracticeSession:
+    row = db.get(PracticeSession, session_id)
+    if row is None or row.user_id != user.id:  # 别人的练习一律当作不存在
+        raise HTTPException(status_code=404, detail="这次陪练不存在")
+    return row
+
+
+def _practice_llm(user: User, fn):
+    """陪练里调用大模型的步骤：和对话共用每分钟频率与并发名额；业务错误（如已结束）转成 400，模型故障转成 502"""
+    try:
+        limiter.check_rate(user.id)
+        limiter.acquire(user.id)
+    except Rejected as e:
+        raise HTTPException(status_code=e.status, detail=e.message)
+    try:
+        return fn()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("dinggo.ai").exception("practice failed")
+        raise HTTPException(status_code=502, detail=_fail_message(e)) from e
+    finally:
+        limiter.release(user.id)
+
+
+@router.get("/practice/scenarios")
+def practice_scenarios(user: User = Depends(current_user)):
+    return ai_practice.public_scenarios()
+
+
+@router.post("/practice/start")
+def practice_start(body: PracticeStartIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    if body.scenarioId not in ai_practice.BY_ID:
+        raise HTTPException(status_code=404, detail="没有这个陪练场景")
+    since = utcnow() - timedelta(days=1)
+    used = db.scalar(select(func.count()).select_from(PracticeSession).where(PracticeSession.user_id == user.id, PracticeSession.created_at >= since)) or 0
+    if used >= get_settings().daily_practice_limit:
+        raise HTTPException(status_code=429, detail="今天的陪练次数已用完，请明天再来")
+    return ai_practice.start(db, user, body.scenarioId)  # 开场白是写好的，不调用大模型
+
+
+@router.post("/practice/turn")
+def practice_turn(body: PracticeTurnIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    row = _practice_session(db, user, body.sessionId)
+    if not worker.configured():
+        raise HTTPException(status_code=503, detail="AI 服务还没有配置，请联系管理员")
+    return _practice_llm(user, lambda: ai_practice.turn(db, row, body.text))
+
+
+@router.post("/practice/finish")
+def practice_finish(body: PracticeFinishIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    row = _practice_session(db, user, body.sessionId)
+    if row.status == "finished" and row.result:
+        return row.result
+    if not worker.configured():
+        raise HTTPException(status_code=503, detail="AI 服务还没有配置，请联系管理员")
+    return _practice_llm(user, lambda: ai_practice.finish(db, row))

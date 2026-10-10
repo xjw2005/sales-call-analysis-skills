@@ -280,10 +280,6 @@ def test_merge_legacy_user_with_wechat_account(client):
     assert client.post("/admin/users/merge", json={"fromId": u2["id"], "intoId": old2["id"]}, headers=ADMIN).status_code == 409
 
 
-def test_ai_endpoints_not_ready(client, auth):
-    assert client.post("/practice/start", json={}, headers=auth).status_code == 501
-
-
 def test_parse_due():
     base = date(2026, 9, 28)  # 周一
     assert parse_due("今天", base) == base

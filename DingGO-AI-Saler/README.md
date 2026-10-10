@@ -45,7 +45,7 @@ assets/      图标与空状态插画（SVG）
 ## 连接真实后端（DingGO-backend）
 
 1. 按 `DingGO-backend/README.md` 把后端部署到服务器。
-2. 改 `config/index.js`：`useMock: false`，`baseUrl: 'http://服务器公网IP:8000'`。`mockAI: false`（首页问答走后端大模型；服务器没配置密钥时会提示）；`mockPractice` 保持 `true`（陪练仍用演示数据，直到后端接入）。
+2. 改 `config/index.js`：`useMock: false`，`baseUrl: 'http://服务器公网IP:8000'`。`mockAI: false`（首页问答走后端大模型；服务器没配置密钥时会提示）；`mockPractice: false`（陪练由后端大模型扮演客户并点评；改成 `true` 则用本地演示数据）。
 3. 开发者工具「详情 → 本地设置」勾选「不校验合法域名…」；手机上用真机调试。
 4. 首次请求会自动 `wx.login` 登录，凭证存在本机。
 
@@ -70,6 +70,6 @@ assets/      图标与空状态插画（SVG）
 
 - 登录（`wx.login` 换 token）、区域经理角色。
 - 息屏或切后台时录音是否持续，需要真机测试。
-- AI 问答、陪练点评目前是按关键词拼的演示结果；接入大模型后建议改为流式输出。
+- AI 问答和陪练已接入后端大模型；`useMock: true` 时仍是本地演示数据。陪练的客户台词暂不是流式输出。
 - 简报里的问题、异议话术来自 `utils/playbook.js` 固定话术库，后期可由大模型按门店情况生成。
 - 主动提醒推送到微信需用订阅消息（一次性订阅），尚未接入。
