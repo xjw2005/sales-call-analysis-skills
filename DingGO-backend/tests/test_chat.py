@@ -335,3 +335,29 @@ def test_model_rate_limited_gets_clear_message(client, auth, monkeypatch):
     monkeypatch.setattr(core, "call_llm", limited)
     r = client.post("/chat", json={"question": "你好"}, headers=auth)
     assert r.status_code == 502 and "请求比较多" in r.json()["message"]
+
+
+def test_legacy_store_context_includes_imported_analysis_and_notes(client, auth, monkeypatch):
+    """只有飞书导入历史分析的店：模型要能看到分析各模块原文、速记和调研数据，不能只有一句话画像"""
+    from app.db import SessionLocal
+    from app.models import Visit
+    from app.services.ingest import upsert_module
+
+    s = make_store(client, auth, "有格盒子")
+    v = make_visit(client, auth, s["id"], stage="日常维护", note="老板说想要陈列支持", purposes=["日常维护"],
+                   survey={"area": "80㎡", "a2MonthlyEst": 30})
+    with SessionLocal() as db:
+        visit = db.get(Visit, int(v["id"]))
+        visit.legacy, visit.status = True, "done"
+        upsert_module(db, visit.id, "ai-summary", {"text": "本次聊了招人和陈列"})
+        upsert_module(db, visit.id, "explicit-needs", {"text": "1. 需求点：想要陈列支持"})
+        upsert_module(db, visit.id, "next-action", {"text": "周五前送陈列物料"})
+        upsert_module(db, visit.id, "store-profile", {"text": "经营模式：夫妻店；利润偏好：看重返利"})
+        db.commit()
+    seen = []
+    stub(monkeypatch, {"action": "answer", "reply": "好的"}, seen)
+    client.post("/chat", json={"question": "介绍一下有格盒子"}, headers=auth)
+    ctx = seen[0]
+    for want in ("历史分析原文", "本次聊了招人和陈列", "想要陈列支持", "周五前送陈列物料", "夫妻店", "老板说想要陈列支持", "店铺面积80㎡"):
+        assert want in ctx, want
+    assert "没有结构化结果" not in ctx

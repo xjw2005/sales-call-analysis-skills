@@ -18,11 +18,11 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import SessionLocal
-from ..models import ChatLog, ChatMessage, ChatSession, Store, User, utcnow
+from ..models import ChatLog, ChatMessage, ChatSession, Store, User, VisitAnalysis, utcnow
 from ..services import plans
 from ..services.access import store_filter, team_ids
 from ..services.playbook import OBJECTIONS
-from ..services.summary import list_todos, list_visits, summarize_store
+from ..services.summary import MODULE_LABELS, _effective, list_todos, list_visits, summarize_store
 from . import core, memory
 from . import knowledge as kb
 
@@ -92,6 +92,50 @@ def find_store(db: Session, user: User, question: str, store_id: str | None) -> 
     return None, False
 
 
+SURVEY_LABELS = {"area": "店铺面积", "monthlyTotal": "全品类月均销售（罐）", "storeType": "店铺类型", "crossBorder": "是否做跨境",
+                 "danoneMonthlyEst": "达能月均预估（罐）", "a2MonthlyEst": "a2 月均预估（罐）"}
+# 飞书导入的历史分析是整段原文；每个模块最多带多少字（总量有限，避免撑大提示词）
+LEGACY_LIMITS = {"ai-summary": 300, "store-profile": 450, "concerns": 250, "explicit-needs": 250, "implicit-needs": 200,
+                 "effectiveness": 200, "next-action": 300, "loop": 250}
+
+
+def _visit_notes(visits: list[dict]) -> list[str]:
+    """最近几次拜访里销售自己记的信息：目的、门店状态、现场速记、调研数据（不管有没有 AI 分析都在）"""
+    out = []
+    for v in visits[:3]:
+        bits = [f"{core_date(v['createdAt'])} {v['stage']}"]
+        if v.get("purposes"):
+            bits.append("目的：" + "、".join(v["purposes"]))
+        if v.get("cooperated"):
+            bits.append(f"是否达成合作：{v['cooperated']}")
+        if v.get("storeCondition"):
+            bits.append(f"门店状态：{v['storeCondition']}")
+        if (v.get("note") or "").strip():
+            bits.append("现场速记：" + _clip(v["note"], 200))
+        survey = "；".join(f"{SURVEY_LABELS[k]}{val}" for k, val in (v.get("survey") or {}).items() if k in SURVEY_LABELS and val not in ("", None))
+        if survey:
+            bits.append("调研：" + survey)
+        if len(bits) > 1:
+            out.append("拜访记录：" + "｜".join(bits))
+    return out
+
+
+def _legacy_lines(db: Session, visits: list[dict]) -> list[str]:
+    """没有结构化分析时，用最近一次飞书导入的分析原文（显性/隐性需求、关心点、门店档案、下一步、闭环……）"""
+    if any(v["status"] in ("done", "partial_manual") and not v["legacy"] for v in visits):
+        return []  # 有新的结构化结果就用它，上面已经带了
+    last = next((v for v in visits if v["legacy"] and v["status"] in ("done", "partial_manual")), None)
+    if last is None:
+        return []
+    rows = {r.module: r for r in db.scalars(select(VisitAnalysis).where(VisitAnalysis.visit_id == int(last["id"])))}
+    out = [f"（以下是 {core_date(last['createdAt'])} 从飞书导入的历史分析原文）"]
+    for module, limit in LEGACY_LIMITS.items():
+        text = ((_effective(rows[module]) or {}).get("text", "") if module in rows else "").strip()
+        if text:
+            out.append(f"{MODULE_LABELS[module]}：{_clip(text, limit)}")
+    return out if len(out) > 1 else ["（这家店有历史拜访，但没有分析内容）"]
+
+
 def store_context(db: Session, user: User, store: Store) -> str:
     visits = list_visits(db, user, store_id=store.id)
     s = summarize_store(db, store, visits)
@@ -115,9 +159,8 @@ def store_context(db: Session, user: User, store: Store) -> str:
             lines.append(f"上次合作进展评分：{a['effectiveness']['total']} 分；{_clip(a['effectiveness'].get('conclusion', ''), 150)}")
         for act in a["nextAction"].get("actions", [])[:3]:
             lines.append(f"建议行动：{act.get('topic', '')}——{act.get('action', '')}（{act.get('timeframe', '')}）")
-    legacy = next((v for v in visits if v["legacy"] and v["status"] in ("done", "partial_manual")), None)
-    if legacy and not last:
-        lines.append("（这家店只有从飞书导入的历史分析，没有结构化结果）")
+    lines += _visit_notes(visits)
+    lines += _legacy_lines(db, visits)
     todos = [t for t in list_todos(db, user, scope="team") if t["storeId"] == str(store.id) and not t["done"]]
     for t in todos[:5]:
         lines.append(f"待办：{t['topic']}（{t['due']['text']}）")
