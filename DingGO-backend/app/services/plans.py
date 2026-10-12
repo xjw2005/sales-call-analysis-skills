@@ -12,9 +12,12 @@ from sqlalchemy.orm import Session
 
 from ..models import Store, StoreDirectory, Todo, User, Visit, VisitPlan, utcnow
 from .access import store_filter, team_ids
+from .geo import distance_text, haversine_km, valid_point
 from .timeutil import local_date, today
 
 DUE_SOON_DAYS = 2  # 承诺离到期还有几天就提醒
+NEAR_MAX_KM = 50.0  # 「附近」默认最远找多少公里；销售自己说了范围（「5 公里内」）就按他说的
+NEAR_POOL = 60  # 先取最近的这些店再算优先级理由（避免对整个片区逐家算）
 
 
 def district_expr():
@@ -28,7 +31,7 @@ def _coalesce(col, dcol):
 
 def _store_rows(db: Session, user: User, district: str | None = None):
     q = (
-        select(Store.id, Store.name, Store.address, Store.cooperation_status, district_expr().label("district"),
+        select(Store.id, Store.name, Store.address, Store.cooperation_status, Store.lat, Store.lng, district_expr().label("district"),
                _coalesce(Store.province, StoreDirectory.province).label("province"), _coalesce(Store.city, StoreDirectory.city).label("city"))
         .outerjoin(StoreDirectory, Store.directory_id == StoreDirectory.id)
         .where(store_filter(team_ids(db, user)))
@@ -78,12 +81,25 @@ def _days_since(at) -> int | None:
     return None if at is None else (local_date(utcnow()) - local_date(at)).days
 
 
-def _cand(row, reason: str, tags: list[str], last_days: int | None, checked: bool = False) -> dict:
-    return {
+def _cand(row, reason: str, tags: list[str], last_days: int | None, checked: bool = False, distance_km: float | None = None) -> dict:
+    out = {
         "storeId": str(row.id), "name": row.name, "district": row.district or "", "address": row.address or "",
         "cooperationStatus": row.cooperation_status, "reason": reason, "tags": tags,
         "lastVisitDays": last_days, "checked": checked,
     }
+    if distance_km is not None:
+        out["distanceKm"] = round(distance_km, 2)
+        out["reason"] = f"距你 {distance_text(distance_km)}；{reason}" if reason else f"距你 {distance_text(distance_km)}"
+    return out
+
+
+def _has_point(row) -> bool:
+    return row.lat is not None and row.lng is not None and valid_point(row.lat, row.lng)
+
+
+def _with_distance(rows, near: tuple[float, float]) -> list[tuple[float, object]]:
+    """有坐标的门店及其到 near 的距离（公里），没有坐标的不参与"""
+    return [(haversine_km(near[0], near[1], r.lat, r.lng), r) for r in rows if _has_point(r)]
 
 
 # ---------------------------------------------------------------- 销量缺口
@@ -225,19 +241,30 @@ def regions(db: Session, user: User, level: str, parent: str = "") -> list[dict]
 
 
 def search(db: Session, user: User, province: str = "", city: str = "", district: str = "", keyword: str = "",
-           cooperation: str = "", visit: str = "any", sort: str = "priority", limit: int = 15) -> list[dict]:
+           cooperation: str = "", visit: str = "any", sort: str = "priority", limit: int = 15,
+           near: tuple[float, float] | None = None, radius_km: float | None = None) -> list[dict]:
     """按条件找门店。province/city/district 做包含匹配（「重庆」能匹配「重庆市」）；
     visit：any | never（从未拜访）| stale（30 天以上没去）| recent（14 天内去过）；
-    sort：priority（综合优先级）| sales_gap（销量低于平时，差额大的在前）| oldest（最久没去的在前）| recent（最近去过的在前）"""
+    sort：priority（综合优先级）| sales_gap（销量低于平时，差额大的在前）| oldest（最久没去的在前）| recent（最近去过的在前）
+         | distance（离 near 最近的在前，只含有坐标的店，需要 near）
+    near：销售当前位置 (lat, lng)；给了就在结果里带上距离，radius_km 限定范围（公里）。位置只用来算距离，不会被保存。"""
     def hit(value: str, text: str) -> bool:
         """空表示不限；「官渡区|呈贡区」表示多个里任意一个（别名指向多个地区时用）"""
         parts = [x.strip() for x in (value or "").split("|") if x.strip()]
         return not parts or any(x in (text or "") for x in parts)
 
+    if sort == "distance" and near is None:
+        raise ValueError("按距离找店需要销售的位置")
     rows = [r for r in _store_rows(db, user)
             if hit(province, r.province) and hit(city, r.city) and hit(district, r.district)
             and (not keyword or hit(keyword, r.name) or hit(keyword, r.address))
             and (not cooperation or r.cooperation_status == cooperation)]
+    dist: dict[int, float] = {}
+    if near is not None:
+        dist = {r.id: d for d, r in _with_distance(rows, near)}
+        if radius_km or sort == "distance":
+            limit_km = radius_km or NEAR_MAX_KM
+            rows = [r for r in rows if r.id in dist and dist[r.id] <= limit_km]
     ranked = _rank(db, user, rows)
     if visit == "never":
         ranked = [x for x in ranked if x[4] is None]
@@ -251,7 +278,31 @@ def search(db: Session, user: User, province: str = "", city: str = "", district
         ranked.sort(key=lambda x: (x[4] is not None, -(x[4] or 0)))
     elif sort == "recent":
         ranked = sorted((x for x in ranked if x[4] is not None), key=lambda x: x[4])
-    return [_cand(r, reason, tags, days) for _, r, reason, tags, days in ranked[:max(1, min(limit, 30))]]
+    elif sort == "distance":
+        ranked.sort(key=lambda x: dist[x[1].id])
+    return [_cand(r, reason, tags, days, distance_km=dist.get(r.id)) for _, r, reason, tags, days in ranked[:max(1, min(limit, 30))]]
+
+
+def nearby(db: Session, user: User, lat: float, lng: float, radius_km: float | None = None, limit: int = 10) -> dict:
+    """离销售当前位置最近的门店（我能看到的、有坐标的），从近到远。理由里带上距离和「几天没去了、销量偏低」这类信息。
+    没有坐标的门店不参与比较，数量放在 missing 里，让人知道有多少店还没有位置。位置只用来算距离，不会被保存"""
+    rows = _store_rows(db, user)
+    located = _with_distance(rows, (lat, lng))
+    missing = len(rows) - len(located)
+    if not located:
+        return {"title": "还没有门店记录位置，没法按距离推荐", "items": [], "missing": missing, "located": 0}
+    limit_km = radius_km or NEAR_MAX_KM
+    pool = sorted((x for x in located if x[0] <= limit_km), key=lambda x: x[0])[:NEAR_POOL]
+    info = {r.id: (reason, tags, days) for _, r, reason, tags, days in _rank(db, user, [r for _, r in pool])}
+    items = [_cand(r, info[r.id][0], info[r.id][1], info[r.id][2], distance_km=d) for d, r in pool[:max(1, min(limit, 30))]]
+    if not items:
+        return {"title": f"{distance_text(limit_km)}内没有已记录位置的门店", "items": [], "missing": missing, "located": len(located)}
+    far = items[-1]["distanceKm"]
+    return {"title": f"离你最近的 {len(items)} 家门店（最远 {distance_text(far)}）", "items": items, "missing": missing, "located": len(located)}
+
+
+def has_located(db: Session, user: User) -> bool:
+    return any(_has_point(r) for r in _store_rows(db, user))
 
 
 def recent(db: Session, user: User, days: int = 14, limit: int = 10) -> list[dict]:
@@ -312,7 +363,11 @@ def by_sales_gap(db: Session, user: User, district: str | None = None, limit: in
     return {"title": f"{int(sales['refMonth'][5:])}月销量低于平时的门店（{where}，差额从大到小）", "items": items}
 
 
-def suggest(db: Session, user: User, kind: str, district: str | None = None) -> dict:
+def suggest(db: Session, user: User, kind: str, district: str | None = None, near: tuple[float, float] | None = None) -> dict:
+    if kind == "nearby":
+        if near is None:
+            raise ValueError("没有你的位置，请先允许获取位置")
+        return nearby(db, user, near[0], near[1])
     if kind == "district":
         if not district:
             raise ValueError("请指定区县")
@@ -395,6 +450,8 @@ def greeting(db: Session, user: User) -> dict:
     sales = sales_gaps(db, user)
     tail = ([{"label": "销量低于平时的店", "kind": "gap"}] if any(_low(sg) for sg in sales["items"].values()) else [])
     tail += [{"label": "最近拜访过的店", "kind": "recent"}, {"label": "我承诺过的事", "kind": "commitments"}]
+    if has_located(db, user):  # 至少有门店记录了位置，「离我近的店」才有东西可推荐
+        tail.insert(0, {"label": "离我近的店", "kind": "nearby"})
     if plan:
         done = sum(1 for p in plan if p["status"] == "visited")
         if done == len(plan):

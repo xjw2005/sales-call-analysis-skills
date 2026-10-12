@@ -12,6 +12,7 @@ from ..models import (
 )
 from ..services.access import is_manager, team_ids, visible_store
 from ..services.constants import COOPERATION_STATUSES, PROFILE_LABELS, PROFILE_STATES
+from ..services.geo import in_china
 from ..services.ingest import upsert_profile_section
 from ..services.summary import _effective, list_stores, list_todos, list_visits, summarize_store
 
@@ -111,11 +112,13 @@ def get_stores(db: Session = Depends(get_db), user: User = Depends(current_user)
 @router.post("")
 def create_store(body: StoreIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     _check_status(body.cooperationStatus)
+    if (body.lat is None) != (body.lng is None) or (body.lat is not None and not in_china(body.lat, body.lng)):
+        raise HTTPException(status_code=400, detail="门店位置不正确，请重新选择")  # 经纬度要成对给，并且在国内
     data = {
         "name": body.name.strip(), "province": body.province, "city": body.city, "district": body.district,
         "address": body.address, "grid": body.grid, "store_type": body.storeType,
         "cooperation_status": body.cooperationStatus, "contact_name": body.contactName, "contact_phone": body.contactPhone,
-        "lat": body.lat, "lng": body.lng, "primary_sales_id": user.id,
+        "lat": body.lat, "lng": body.lng, "geo_source": "manual" if body.lat is not None else "", "primary_sales_id": user.id,
     }
     if body.platform and body.externalId:
         exists = db.scalars(select(Store).where(Store.platform == body.platform, Store.external_id == body.externalId)).first()
@@ -149,6 +152,10 @@ def update_store(store_id: int, body: StorePatch, db: Session = Depends(get_db),
         raise HTTPException(status_code=403, detail="只有门店负责人或其上级能修改门店资料")
     if body.cooperationStatus is not None:
         _check_status(body.cooperationStatus)
+    if body.lat is not None or body.lng is not None:  # 编辑页地图选点：规则同 POST /{id}/location
+        if body.lat is None or body.lng is None or not in_china(body.lat, body.lng):
+            raise HTTPException(status_code=400, detail="门店位置不正确，请重新选择")
+        store.geo_source = "manual"  # 人工设置的位置不会被批量地址解析覆盖
     mapping = {
         "name": "name", "province": "province", "city": "city", "district": "district", "address": "address", "grid": "grid",
         "storeType": "store_type", "cooperationStatus": "cooperation_status", "contactName": "contact_name",
@@ -177,6 +184,25 @@ def delete_store(store_id: int, db: Session = Depends(get_db), user: User = Depe
         db.delete(p)
     db.commit()
     return {"ok": True}
+
+
+class LocationIn(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+
+
+@router.post("/{store_id}/location")
+def set_location(store_id: int, body: LocationIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """把门店的位置设为这个坐标（销售在店里点「把当前位置设为门店位置」，或地图选点）。
+    只有门店负责人或其上级能设；人工设置的位置不会被批量地址解析覆盖"""
+    store = visible_store(db, user, store_id)
+    if not _can_manage(db, user, store):
+        raise HTTPException(status_code=403, detail="只有门店负责人或其上级能设置门店位置")
+    if not in_china(body.lat, body.lng):
+        raise HTTPException(status_code=400, detail="这个位置不在国内，请重新选择")
+    store.lat, store.lng, store.geo_source = body.lat, body.lng, "manual"
+    db.commit()
+    return _detail(db, user, store)
 
 
 @router.post("/{store_id}/corrections")

@@ -22,6 +22,7 @@ from ..models import ChatLog, ChatMessage, ChatSession, PracticeSession, User, u
 from ..services.timeutil import to_ms
 from ..services.access import visible_store
 from ..services.assistant import brief, today_panel
+from ..services.geo import valid_point
 
 router = APIRouter(tags=["助手"])
 
@@ -36,9 +37,15 @@ def get_brief(store_id: int, db: Session = Depends(get_db), user: User = Depends
     return brief(db, user, visible_store(db, user, store_id))
 
 
+class LocationIn(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+
+
 class ChatIn(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     storeId: str | None = None
+    location: LocationIn | None = None  # 销售当前位置（找附近的店用）：只在这次提问里算距离，不保存、不给模型看
     sessionId: int | None = None  # 不传就新开一段对话；上下文由服务端按会话取
 
 
@@ -66,6 +73,10 @@ def _guard(db: Session, user: User, body: ChatIn) -> None:
         raise HTTPException(status_code=e.status, detail=e.message)
 
 
+def _point(body: ChatIn) -> tuple[float, float] | None:
+    return (body.location.lat, body.location.lng) if body.location and valid_point(body.location.lat, body.location.lng) else None
+
+
 def _fail_message(e: Exception) -> str:
     return "AI 现在请求比较多，请稍后再试" if "HTTP 429" in str(e) else "AI 暂时没有响应，请稍后再试"
 
@@ -79,7 +90,7 @@ def chat(body: ChatIn, db: Session = Depends(get_db), user: User = Depends(curre
     except Rejected as e:
         raise HTTPException(status_code=e.status, detail=e.message)
     try:
-        return ai_chat.chat(db, user, body.question, body.storeId, body.sessionId)
+        return ai_chat.chat(db, user, body.question, body.storeId, body.sessionId, location=_point(body))
     except Exception as e:  # noqa: BLE001 模型或网络失败，给销售一句明白话，不暴露内部错误
         raise HTTPException(status_code=502, detail=_fail_message(e)) from e
     finally:
@@ -105,7 +116,7 @@ def chat_stream(body: ChatIn, db: Session = Depends(get_db), user: User = Depend
         try:
             with SessionLocal() as sdb:  # 流式响应期间依赖里的会话已经关闭，这里自己开
                 me = sdb.get(User, user_id)
-                events.put({"type": "final", **ai_chat.chat(sdb, me, body.question, body.storeId, body.sessionId, emit=events.put)})
+                events.put({"type": "final", **ai_chat.chat(sdb, me, body.question, body.storeId, body.sessionId, emit=events.put, location=_point(body))})
         except Exception as e:  # noqa: BLE001
             logging.getLogger("dinggo.ai").exception("chat stream failed")
             events.put({"type": "error", "message": _fail_message(e)})

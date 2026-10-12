@@ -33,11 +33,16 @@ SYSTEM = """你是「DingGo」，A2 奶粉销售团队的 AI 销售助手，和�
 A) 调用工具查真实数据（一次一个，结果会在下一轮发给你，最多查 4 次）：
 {"action":"tool","tool":"list_regions","args":{"level":"province|city|district","parent":"上一级名称，可空"}}
   → 列出我们有门店的省/市/区县及门店数。不确定某个地方有没有门店、区县叫什么时，先查它。
-{"action":"tool","tool":"search_stores","args":{"province":"","city":"","district":"","keyword":"","cooperation":"","visit":"any","sort":"priority","limit":10}}
+{"action":"tool","tool":"search_stores","args":{"province":"","city":"","district":"","keyword":"","cooperation":"","visit":"any","sort":"priority","near":false,"radius_km":0,"limit":10}}
   → 按条件找门店。省市区做包含匹配（填「重庆」就能匹配「重庆市」）；keyword 匹配店名或地址；
     cooperation 可填 已合作|已触达未合作|意向中|未触达；
     visit：any 不限 | never 从未拜访 | stale 30 天以上没去 | recent 14 天内去过；
-    sort：priority 综合优先级（有到期约定、销量偏低、久未拜访的在前）| sales_gap 本期销量低于平时的（差额大的在前）| oldest 最久没去的在前 | recent 最近去过的在前。
+    sort：priority 综合优先级（有到期约定、销量偏低、久未拜访的在前）| sales_gap 本期销量低于平时的（差额大的在前）| oldest 最久没去的在前 | recent 最近去过的在前
+          | distance 离销售当前位置最近的在前（销售说「附近的店」「离我近的」「我这附近」时用，同时 near 填 true）。
+    near=true 表示按销售当前位置算距离，结果会带上距离；radius_km 是范围（公里，不限制就填 0，销售说「5 公里内」就填 5）。
+    「销售当前位置」那一行说明位置有没有；没有时工具会返回 needLocation：这时用 answer 告诉销售「需要先允许获取位置，点下面的按钮」，
+    不要编造距离，也不要向销售要坐标。你看不到具体坐标，距离由系统算好放在工具结果里，只能用工具返回的。
+    有些门店还没有记录位置，不会出现在按距离找的结果里；结果里的 missing 是这样的门店数量，需要时可以告诉销售。
   工具的结果全部来自数据库，门店名、数字只能用工具返回的。
 
 {"action":"tool","tool":"add_to_plan","args":{"positions":[1,2],"names":["店名"]}}
@@ -173,8 +178,9 @@ def core_date(ms: int) -> str:
 
 
 def build_user_message(db: Session, user: User, question: str, store: Store | None, history: list[dict], shown: list[Store] | None = None,
-                       memory: str = "", summary: str = "", last_search: dict | None = None, focus: bool = True) -> str:
+                       memory: str = "", summary: str = "", last_search: dict | None = None, focus: bool = True, has_location: bool = False) -> str:
     parts = []
+    parts.append("销售当前位置：" + ("已提供（要找附近的门店，用 search_stores 并设置 near=true；你看不到具体坐标）" if has_location else "没有提供（要按位置找店时工具会返回 needLocation）"))
     if store is not None and focus:
         parts.append("门店资料：\n" + store_context(db, user, store))
     elif store is not None:
@@ -284,8 +290,10 @@ def resolve_stores(db: Session, user: User, names: list, shown: list[Store]) -> 
 class Run:
     """一次提问的执行过程：多轮工具调用 → 回答。emit 用来把进度和文字实时推给前端"""
 
-    def __init__(self, db: Session, user: User, emit=None, shown: list[Store] | None = None):
+    def __init__(self, db: Session, user: User, emit=None, shown: list[Store] | None = None, location: tuple[float, float] | None = None):
         self.db, self.user, self.emit = db, user, emit or (lambda e: None)
+        self.location = location  # 销售当前位置：只在这次提问里用来算距离，不给模型看、不保存
+        self.need_location = False
         self.shown = shown or []
         self.found: dict | None = None
         self.plan_changed: list[dict] | None = None
@@ -337,7 +345,7 @@ class Run:
             kw = {k: str(args.get(k) or "")[:40] for k in SEARCH_ARGS}
             if kw["visit"] not in ("any", "never", "stale", "recent"):
                 kw["visit"] = "any"
-            if kw["sort"] not in ("priority", "sales_gap", "oldest", "recent"):
+            if kw["sort"] not in ("priority", "sales_gap", "oldest", "recent", "distance"):
                 kw["sort"] = "priority"
             if kw["cooperation"] not in ("", "已合作", "已触达未合作", "意向中", "未触达"):
                 kw["cooperation"] = ""
@@ -345,11 +353,25 @@ class Run:
                 kw["limit"] = max(1, min(int(args.get("limit") or 10), 20))
             except (TypeError, ValueError):
                 kw["limit"] = 10
-            items = plans.search(db, user, **kw)
-            self.found = {"title": _title(kw, len(items)), "items": items, "kind": "search"}
-            self.last_search = {"args": {k: v for k, v in kw.items() if v and v not in ("any", "priority")}, "found": len(items)}
+            near_wanted = args.get("near") is True or kw["sort"] == "distance"
+            if near_wanted and self.location is None:
+                # 要按位置找、但这次提问没有位置：让前端引导销售授权，不编造距离
+                self.need_location = True
+                ok = False
+                self.tools.append({"tool": name, "args": args, "ok": ok})
+                return json.dumps({"error": "没有销售的位置", "needLocation": True}, ensure_ascii=False)
+            try:
+                radius = float(args.get("radius_km") or 0)
+            except (TypeError, ValueError):
+                radius = 0.0
+            near = self.location if near_wanted else None
+            items = plans.search(db, user, near=near, radius_km=radius if 0 < radius <= 200 else None, **kw)
+            self.found = {"title": _title(kw, len(items), near is not None), "items": items, "kind": "search"}
+            self.last_search = {"args": {**{k: v for k, v in kw.items() if v and v not in ("any", "priority")}, **({"near": True} if near else {})}, "found": len(items)}
             self.shown = [x for x in (db.get(Store, int(c["storeId"])) for c in items) if x]
-            result = json.dumps({"found": len(items), "stores": [{"position": i, "name": c["name"], "district": c["district"], "reason": c["reason"]} for i, c in enumerate(items, 1)]}, ensure_ascii=False)
+            result = json.dumps({"found": len(items), "stores": [
+                {"position": i, "name": c["name"], "district": c["district"], "reason": c["reason"], **({"distanceKm": c["distanceKm"]} if "distanceKm" in c else {})}
+                for i, c in enumerate(items, 1)]}, ensure_ascii=False)
         elif name == "add_to_plan":
             self.emit({"type": "status", "text": "正在加入今日计划…"})
             picked: list[Store] = []
@@ -398,7 +420,8 @@ class Run:
     def run(self, question: str, store: Store | None, history: list[dict], focus: bool = True, summary: str = "", last_search: dict | None = None) -> dict:
         self.question = question
         base = build_user_message(self.db, self.user, question, store, history, self.shown,
-                                  memory=memory.relevant_text(self.db, self.user, question), summary=summary, last_search=last_search, focus=focus)
+                                  memory=memory.relevant_text(self.db, self.user, question), summary=summary, last_search=last_search, focus=focus,
+                                  has_location=self.location is not None)
         transcript = ""
         self.emit({"type": "status", "text": "思考中…"})
         for step in range(MAX_TOOL_ROUNDS + 1):
@@ -428,6 +451,8 @@ class Run:
                 res = {"text": reply or "目前资料里没有这方面的信息。", "suggestions": sugg}
             if self.plan_changed is not None:
                 res["plan"] = self.plan_changed
+            if self.need_location:
+                res["needLocation"] = True  # 前端据此显示「允许获取位置」，拿到位置后用同一个问题再问一次
             if self.memory_result is not None:
                 res["memory"] = self.memory_result  # 待确认的，前端显示「记住 / 不用」；已生效的，前端提示「已记住」
             return res
@@ -473,7 +498,8 @@ def _stored_shown(db: Session, user: User, sess: ChatSession) -> list[Store]:
     return shown_stores(db, user, {"shown": [{"storeId": it.get("storeId")} for it in items]})
 
 
-def chat(db: Session, user: User, question: str, store_id: str | None = None, session_id: int | None = None, emit=None) -> dict:
+def chat(db: Session, user: User, question: str, store_id: str | None = None, session_id: int | None = None, emit=None,
+         location: tuple[float, float] | None = None) -> dict:
     """一次提问。对话上下文（历史、刚给销售看的门店）由服务端按会话取；会话只有本人能访问。
     emit 不为空时走流式：进度和回答文字实时推给 emit；返回值始终是完整结果。
     每次提问都记一条 chat_logs（耗时、模型轮数、token、用到的工具、出错信息）。"""
@@ -481,7 +507,7 @@ def chat(db: Session, user: User, question: str, store_id: str | None = None, se
     sess = _load_session(db, user, session_id, question)
     history = _stored_history(db, sess)
     store, focus = find_store(db, user, question, store_id)
-    run = Run(db, user, emit, _stored_shown(db, user, sess))
+    run = Run(db, user, emit, _stored_shown(db, user, sess), location)
     run.emit_stream = emit is not None
     run.session_id = sess.id
     error, result = "", {"text": "", "suggestions": []}
@@ -551,9 +577,9 @@ def session_messages(db: Session, user: User, session_id: int) -> list[dict]:
     return out
 
 
-def _title(kw: dict, n: int) -> str:
-    where = "".join(kw[k] for k in ("province", "city", "district")) or "全部地区"
-    sort = {"priority": "优先级从高到低", "sales_gap": "销量低于平时、差额从大到小", "oldest": "最久没去的在前", "recent": "最近去过的在前"}[kw["sort"]]
+def _title(kw: dict, n: int, near: bool = False) -> str:
+    where = "".join(kw[k] for k in ("province", "city", "district")) or ("离你近的" if near else "全部地区")
+    sort = {"priority": "优先级从高到低", "sales_gap": "销量低于平时、差额从大到小", "oldest": "最久没去的在前", "recent": "最近去过的在前", "distance": "由近到远"}[kw["sort"]]
     return f"{where}的门店（{n} 家，{sort}）"
 
 

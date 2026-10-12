@@ -1,14 +1,14 @@
 """门店、拜访的删除改为隐藏（deleted_at / deleted_by），管理员可恢复
 
-Revision ID: 0009
-Revises: 0008
+Revision ID: 0010
+Revises: 0009
 Create Date: 2026-10-12 12:00:00
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = '0009'
-down_revision = '0008'
+revision = '0010'
+down_revision = '0009'
 branch_labels = None
 depends_on = None
 

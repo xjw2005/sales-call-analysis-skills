@@ -86,6 +86,7 @@ class Store(Base):
     photo_key: Mapped[str] = mapped_column(String(255), default="")
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    geo_source: Mapped[str] = mapped_column(String(16), default="")  # manual 人工设置 | geocode 地址解析；人工设置的不会被批量解析覆盖
     feishu_record_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # 删除只是隐藏：有值就不再出现在任何列表和查询里，管理员可以恢复
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
