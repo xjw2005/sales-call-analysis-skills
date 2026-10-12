@@ -3,6 +3,7 @@ const { STAGES, FIRST_STAGE, STORE_CONDITIONS, NO_RECORDING_REASONS } = require(
 const { listStores } = require('../../services/store');
 const { createVisit, completeUpload } = require('../../services/visit');
 const { uploadSegments } = require('../../services/upload');
+const { getLocation, chooseOnMap } = require('../../services/location');
 
 const app = getApp();
 const SEGMENT_MS = 10 * 60 * 1000; // 微信单段录音上限 10 分钟，到点自动续录下一段
@@ -44,6 +45,8 @@ Page({
     importName: '',
     submitting: false,
     step: 0,
+    locState: 'idle', // idle | locating | ok | fail
+    locText: '点击获取（选填，不影响提交）',
   },
 
   onLoad({ storeId, mode }) {
@@ -191,6 +194,7 @@ Page({
             if (!r.confirm) return;
             this.userStopped = false;
             this.recorder.start(this.recordOptions());
+            if (!this.loc) this.locate(); // 顺便记下到店位置：不等结果，失败也不影响录音
           },
         });
       },
@@ -218,6 +222,8 @@ Page({
         if (!r.confirm) return;
         this.startedAt = 0; // 进店时间重新算：以重录后第一次开始录音为准
         this.submitted = null; // 旧的上传进度作废
+        this.loc = null;
+        this.setData({ locState: 'idle', locText: '点击获取（选填，不影响提交）' });
         wx.disableAlertBeforeUnload();
         this.setData({ state: 'idle', seconds: 0, timeText: '00:00', segments: [], importName: '' });
       },
@@ -260,6 +266,8 @@ Page({
       success: async ({ tapIndex }) => {
         wx.showLoading({ title: '登记中', mask: true });
         try {
+          // 没录音更需要位置来证明去过：试一次（最多等 6 秒，不能卡在系统弹窗上），失败也照常登记
+          if (!this.loc) await Promise.race([this.locate(), new Promise((r) => setTimeout(r, 6000))]);
           const visit = await createVisit({
             storeId: stores[storeIndex].id,
             stage: STAGES[stageIndex],
@@ -269,6 +277,7 @@ Page({
             storeCondition: conditionIndex > 0 ? conditions[conditionIndex] : undefined,
             recordingMode: 'none',
             noRecordingReason: NO_RECORDING_REASONS[tapIndex],
+            checkin: this.checkin(),
           });
           wx.hideLoading();
           wx.redirectTo({ url: `/pages/visit/detail/index?id=${visit.id}` });
@@ -278,6 +287,71 @@ Page({
         }
       },
     });
+  },
+
+  // ---- 打卡位置（选填：定位失败、没授权都不影响录音和提交） ----
+  checkin() {
+    const l = this.loc;
+    return l ? { lat: l.lat, lng: l.lng, address: l.address || '' } : undefined;
+  },
+  async locate({ manual = false } = {}) {
+    if (this.data.locState === 'locating') return;
+    this.setData({ locState: 'locating', locText: '定位中…' });
+    try {
+      const p = await getLocation();
+      if (this.loc && this.loc.source === 'map') { // 期间用户已经在地图上选了位置：以手选的为准
+        this.setData({ locState: 'ok', locText: this.locText(this.loc) });
+        return;
+      }
+      this.loc = { lat: p.lat, lng: p.lng, accuracy: p.accuracy, address: '', source: 'gps' };
+      this.setData({ locState: 'ok', locText: this.locText(this.loc) });
+    } catch (err) {
+      this.setData({ locState: 'fail', locText: err.kind === 'unsupported' ? '定位不可用，点此地图选点' : '未获取到位置，点此重试' });
+      if (manual) this.explainLocationError(err);
+    }
+  },
+  locText(l) {
+    if (l.source === 'map') return `已选：${l.address || '地图上的位置'}`;
+    return `已定位（精度约 ${Math.round(l.accuracy || 0)} 米）`;
+  },
+  // 只在用户自己点「获取位置」时才弹说明；开始录音时的自动定位失败只在行里提示，不打断
+  explainLocationError(err) {
+    if (err.kind === 'denied' || err.kind === 'system') {
+      wx.showModal({
+        title: '没有获取到位置',
+        content: err.kind === 'system' ? '手机或微信的定位没有开启。请打开手机的定位开关，并在系统设置里允许微信使用位置。' : '你没有允许小程序使用位置。可以在设置里打开，也可以点「地图选点」手动选。',
+        confirmText: '去设置',
+        success: (r) => { if (r.confirm) wx.openSetting(); },
+      });
+    } else if (err.kind === 'unsupported') {
+      wx.showToast({ title: '定位接口暂未开通，请用地图选点', icon: 'none' });
+    } else if (err.kind !== 'cancel') {
+      wx.showToast({ title: '定位失败，可稍后重试或地图选点', icon: 'none' });
+    }
+  },
+  tapLocation() {
+    const items = ['获取当前位置', '在地图上选择位置'];
+    if (this.loc) items.push('清除位置');
+    wx.showActionSheet({
+      itemList: items,
+      success: ({ tapIndex }) => {
+        if (tapIndex === 0) { this.loc = null; this.locate({ manual: true }); }
+        if (tapIndex === 1) this.pickOnMap();
+        if (tapIndex === 2) {
+          this.loc = null;
+          this.setData({ locState: 'idle', locText: '点击获取（选填，不影响提交）' });
+        }
+      },
+    });
+  },
+  async pickOnMap() {
+    try {
+      const p = await chooseOnMap();
+      this.loc = { lat: p.lat, lng: p.lng, address: p.address, source: 'map' };
+      this.setData({ locState: 'ok', locText: this.locText(this.loc) });
+    } catch (err) {
+      if (err.kind === 'denied' || err.kind === 'system') this.explainLocationError(err);
+    }
   },
 
   // ---- 提交 ----
@@ -303,6 +377,7 @@ Page({
           segments,
           enteredAt: this.startedAt,
           storeCondition: conditionIndex > 0 ? conditions[conditionIndex] : undefined,
+          checkin: this.checkin(),
         });
       }
       const visit = sub.visit;

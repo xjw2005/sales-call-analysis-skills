@@ -22,7 +22,7 @@
       </view>
       <view wx:if="{{visit.note}}" class="info-row"><text class="k">现场速记</text><text user-select>{{visit.note}}</text></view>
       <view wx:if="{{visit.surveyText}}" class="info-row"><text class="k">门店调研</text>{{visit.surveyText}}</view>
-      <view wx:if="{{visit.checkin && visit.checkin.address}}" class="info-row"><text class="k">打卡位置</text>{{visit.checkin.address}}</view>
+      <view wx:if="{{hasCheckin}}" class="info-row" bindtap="openCheckin"><text class="k">打卡位置</text>{{checkinText}}<text wx:if="{{checkinOnMap}}" class="map-link"> 在地图上看 ›</text></view>
     </view>
 
     <!-- 无录音 -->

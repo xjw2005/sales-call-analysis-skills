@@ -26,9 +26,9 @@ ANALYSIS_MODULES = {"explicit-needs", "implicit-needs", "concerns", "effectivene
 
 
 class CheckinIn(BaseModel):
-    address: str = ""
-    lat: float | None = None
-    lng: float | None = None
+    address: str = Field(default="", max_length=255)
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    lng: float | None = Field(default=None, ge=-180, le=180)
 
 
 class VisitIn(BaseModel):

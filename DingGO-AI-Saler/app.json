@@ -45,11 +45,12 @@
     ]
   },
   "requiredPrivateInfos": [
-    "chooseLocation"
+    "chooseLocation",
+    "getLocation"
   ],
   "permission": {
     "scope.userLocation": {
-      "desc": "用于选择门店地址"
+      "desc": "用于记录拜访位置（到店打卡）、选择门店地址"
     }
   },
   "sitemapLocation": "sitemap.json",

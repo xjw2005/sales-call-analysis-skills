@@ -68,14 +68,14 @@ function getVisit(id) {
 
 // 新建拜访：真实模式下先拿上传凭证，再逐段上传录音（见 services/upload.js）。
 // recordingMode 为 'none' 时是「登记无录音拜访」，不需要上传
-function createVisit({ storeId, stage, cooperated, note, durationSec, segments, enteredAt, storeCondition, recordingMode = 'uploaded', noRecordingReason = '' }) {
+function createVisit({ storeId, stage, cooperated, note, durationSec, segments, enteredAt, storeCondition, recordingMode = 'uploaded', noRecordingReason = '', checkin }) {
   if (!config.useMock) {
-    return changed(request({ url: '/visits', method: 'POST', data: { storeId, stage, cooperated, note, durationSec, enteredAt, storeCondition, recordingMode, noRecordingReason } }));
+    return changed(request({ url: '/visits', method: 'POST', data: { storeId, stage, cooperated, note, durationSec, enteredAt, storeCondition, recordingMode, noRecordingReason, checkin } }));
   }
   const none = recordingMode === 'none';
   const v = {
     id: `v${Date.now()}`,
-    storeId, stage, cooperated, note, segments, storeCondition, recordingMode, noRecordingReason,
+    storeId, stage, cooperated, note, segments, storeCondition, recordingMode, noRecordingReason, checkin,
     createdAt: enteredAt || Date.now(),
     durationSec: durationSec || 0,
     estCost: Math.round((durationSec || 0) * 0.00035 * 100) / 100,

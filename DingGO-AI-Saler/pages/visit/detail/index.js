@@ -78,7 +78,11 @@ Page({
     };
     // 拜访信息卡：有目的、门店状况、速记、打卡地址或调研信息时才显示
     const checkin = visit.checkin || {};
-    patch.hasInfo = !!((visit.purposes || []).length || visit.storeCondition || visit.note || checkin.address || patch.visit.surveyText);
+    const hasPoint = checkin.lat != null && checkin.lng != null;
+    patch.hasCheckin = !!(checkin.address || hasPoint);
+    patch.checkinText = checkin.address || (hasPoint ? `${Number(checkin.lat).toFixed(5)}，${Number(checkin.lng).toFixed(5)}` : '');
+    patch.checkinOnMap = hasPoint;
+    patch.hasInfo = !!((visit.purposes || []).length || visit.storeCondition || visit.note || patch.hasCheckin || patch.visit.surveyText);
     if (visit.status === 'done' && visit.analysis && visit.analysis.legacy) {
       // 从飞书导入的历史拜访：分析是原文，按模块分段展示
       patch.a = visit.analysis;
@@ -112,6 +116,12 @@ Page({
     this.timer = null;
   },
 
+  // 打卡位置：有坐标就在微信地图上打开
+  openCheckin() {
+    const c = (this.data.visit && this.data.visit.checkin) || {};
+    if (c.lat == null || c.lng == null) return;
+    wx.openLocation({ latitude: Number(c.lat), longitude: Number(c.lng), name: '拜访打卡位置', address: c.address || '', scale: 17 });
+  },
   toggleTimeline() {
     this.setData({ showTimeline: !this.data.showTimeline });
   },

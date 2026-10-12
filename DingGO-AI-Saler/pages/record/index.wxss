@@ -29,3 +29,8 @@
 .num { width: 36rpx; height: 36rpx; border-radius: 50%; border: 2rpx solid currentColor; text-align: center; line-height: 34rpx; font-size: 22rpx; margin-right: 10rpx; }
 .dash { width: 48rpx; border-top: 2rpx dashed #c9cbdc; margin: 0 16rpx; }
 .hint { text-align: center; margin-top: 12rpx; }
+
+.loc { max-width: 440rpx; text-align: right; font-size: 28rpx; }
+.loc.fail { color: #f5a623; }
+.loc.ok { color: #22b07d; }
+.loc.locating { color: #a7aac2; }

@@ -50,3 +50,5 @@
 .info-row { font-size: 27rpx; line-height: 1.7; margin-top: 10rpx; color: #4a4d6b; }
 .legacy-text { font-size: 27rpx; line-height: 1.8; white-space: pre-wrap; }
 .legacy-tip { text-align: left; margin: 0 0 16rpx; }
+
+.map-link { color: #5b55e8; }

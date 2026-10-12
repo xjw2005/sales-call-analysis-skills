@@ -19,6 +19,7 @@
       <picker range="{{conditions}}" value="{{conditionIndex}}" bindchange="onCondition">
         <view class="row between field"><text class="muted">门店状况</text><text class="val">{{conditionIndex > 0 ? conditions[conditionIndex] : '选填'}} ›</text></view>
       </picker>
+      <view class="row between field" bindtap="tapLocation"><text class="muted">打卡位置</text><text class="val loc {{locState}}">{{locText}} ›</text></view>
       <view class="faint mode-tip">{{isFirst ? '首访：7 项分析（需求、关心点、话术评分、金句、档案、行动）' : '日常：4 项分析（需求、关心点、档案累计更新、行动闭环）'}}</view>
     </view>
 

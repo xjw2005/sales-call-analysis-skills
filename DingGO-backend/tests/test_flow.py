@@ -292,3 +292,17 @@ def test_parse_due():
     assert parse_due("1月5日前", base) == date(2027, 1, 5)
     assert parse_due("月底", base) == date(2026, 9, 30)
     assert parse_due("未明确时间/待确认", base) is None
+
+
+def test_checkin_coordinates_are_validated(client, auth):
+    """拜访打卡位置：坐标要在合法范围内、地址不能超过库里的长度，不合法的直接 422，不会写进库里出错"""
+    s = make_store(client, auth)
+    ok = client.post("/visits", json={"storeId": s["id"], "stage": "日常维护", "durationSec": 60, "checkin": {"lat": 29.56301, "lng": 106.55156}}, headers=auth)
+    assert ok.status_code == 200 and ok.json()["checkin"]["lat"] == 29.56301 and ok.json()["checkin"]["address"] == ""
+    for bad in ({"lat": 91, "lng": 106}, {"lat": 29, "lng": -181}, {"address": "长" * 256}):
+        r = client.post("/visits", json={"storeId": s["id"], "stage": "日常维护", "durationSec": 60, "checkin": bad}, headers=auth)
+        assert r.status_code == 422, bad
+    edge = client.post("/visits", json={"storeId": s["id"], "stage": "日常维护", "durationSec": 60, "checkin": {"lat": -90, "lng": 180, "address": "长" * 255}}, headers=auth)
+    assert edge.status_code == 200  # 边界值允许
+    none = client.post("/visits", json={"storeId": s["id"], "stage": "日常维护", "durationSec": 60}, headers=auth)
+    assert none.status_code == 200 and none.json()["checkin"]["lat"] is None  # 没定位也能正常提交
