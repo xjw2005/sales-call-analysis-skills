@@ -86,6 +86,7 @@ class Store(Base):
     photo_key: Mapped[str] = mapped_column(String(255), default="")
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    geo_source: Mapped[str] = mapped_column(String(16), default="")  # manual 人工设置 | geocode 地址解析；人工设置的不会被批量解析覆盖
     feishu_record_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

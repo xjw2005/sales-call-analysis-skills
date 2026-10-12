@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,7 @@ from ..services import plans
 
 router = APIRouter(prefix="/plans", tags=["今日计划"])
 
-SOURCES = {"district", "recent", "commitments", "commitment", "gap", "search", "chat", "sales", "manual"}  # search：对话里模型查出来的候选
+SOURCES = {"district", "recent", "commitments", "commitment", "gap", "search", "chat", "sales", "manual", "nearby"}  # search：对话里模型查出来的候选
 
 
 class PlanIn(BaseModel):
@@ -30,9 +30,12 @@ def greeting(db: Session = Depends(get_db), user: User = Depends(current_user)):
 
 
 @router.get("/suggest")
-def suggest(kind: str, district: str | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def suggest(kind: str, district: str | None = None, lat: float | None = Query(default=None, ge=-90, le=90),
+            lng: float | None = Query(default=None, ge=-180, le=180), db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """候选门店。kind=nearby 需要带上销售当前位置 lat / lng（只用来算距离，不会保存）"""
+    near = (lat, lng) if lat is not None and lng is not None else None
     try:
-        return plans.suggest(db, user, kind, district)
+        return plans.suggest(db, user, kind, district, near)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -247,6 +247,8 @@ def summarize_stores(db: Session, stores: list[Store], visits_by_store: dict[str
             "city": store.city,
             "district": store.district,
             "address": store.address,
+            "hasLocation": store.lat is not None and store.lng is not None,
+            **({"lat": store.lat, "lng": store.lng, "geoSource": store.geo_source or ""} if detail else {}),
             "grid": store.grid,
             "installedAt": store.installed_at.isoformat() if store.installed_at else "",
             "wecomAdded": store.wecom_added,
