@@ -79,6 +79,11 @@ Page({
     }
     this.loadHeader();
     this.greet();
+    // 从门店详情点「问助手」过来：输入框提示问这家店
+    if (app.globalData.askHint) {
+      this.setData({ placeholder: `问问「${app.globalData.askHint}」，例如：老板最关心什么？` });
+      app.globalData.askHint = '';
+    }
     // 从简报 / 异议页点「陪练」跳回首页时，直接开始对应场景
     const pending = app.globalData.pendingPractice;
     if (pending) {

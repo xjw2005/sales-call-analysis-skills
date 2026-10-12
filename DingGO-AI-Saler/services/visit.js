@@ -54,7 +54,7 @@ function simulate(v) {
 function listVisits({ storeId } = {}) {
   if (!config.useMock) return request({ url: '/visits', data: { storeId } });
   const list = seed.visits
-    .filter((v) => !storeId || v.storeId === storeId)
+    .filter((v) => !v.deleted && (!storeId || v.storeId === storeId))
     .map(simulate)
     .sort((a, b) => b.createdAt - a.createdAt);
   return delay(list);
@@ -62,8 +62,28 @@ function listVisits({ storeId } = {}) {
 
 function getVisit(id) {
   if (!config.useMock) return request({ url: `/visits/${id}` });
+  const v = seed.visits.find((x) => x.id === id && !x.deleted);
+  return v ? delay({ ...simulate(v), canEdit: true }) : Promise.reject(new Error('拜访记录不存在'));
+}
+
+// 补充 / 修改拜访信息：现场速记、门店状况、拜访目的
+function updateVisit(id, data) {
+  if (!config.useMock) return changed(request({ url: `/visits/${id}`, method: 'PATCH', data }));
   const v = seed.visits.find((x) => x.id === id);
-  return v ? delay(simulate(v)) : Promise.reject(new Error('拜访记录不存在'));
+  Object.assign(v, data);
+  return delay({ ...simulate(v), canEdit: true });
+}
+
+// 删除拜访（录错门店、测试录音）：只是隐藏，管理员能恢复；正在识别分析的不能删
+function deleteVisit(id) {
+  if (!config.useMock) return changed(request({ url: `/visits/${id}`, method: 'DELETE' }));
+  const v = seed.visits.find((x) => x.id === id);
+  const status = v ? simulate(v).status : '';
+  if (['asr_running', 'role_classifying', 'analyzing', 'reviewing'].includes(status)) {
+    return delay(null).then(() => { throw new Error('这条录音正在识别分析，请等处理完再删除'); });
+  }
+  if (v) v.deleted = true;
+  return delay({ ok: true });
 }
 
 // 新建拜访：真实模式下先拿上传凭证，再逐段上传录音（见 services/upload.js）。
@@ -109,4 +129,4 @@ function retryVisit(id) {
   return delay(null).then(() => { throw new Error('演示数据没有失败的处理任务'); });
 }
 
-module.exports = { listVisits, getVisit, createVisit, completeUpload, confirmCost, rejudge, retryVisit };
+module.exports = { listVisits, getVisit, createVisit, updateVisit, deleteVisit, completeUpload, confirmCost, rejudge, retryVisit };

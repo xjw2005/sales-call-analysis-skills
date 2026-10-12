@@ -4,7 +4,7 @@
     <view class="segment-item {{tab === 1 ? 'active' : ''}}" data-i="1" bindtap="switchTab">已完成 {{doneCount}}</view>
   </view>
 
-  <!-- 待办：今日计划 / 跟进事项 / 待确认录音 -->
+  <!-- 待办：今日计划 / 跟进事项 / 待确认录音。每张卡片只有一个主按钮，其余操作在「···」里 -->
   <block wx:if="{{tab === 0}}">
     <block wx:if="{{planOpen.length}}">
       <view class="sec-title">今日计划 · 要去的店</view>
@@ -15,8 +15,7 @@
         </view>
         <view wx:if="{{item.reason || item.district}}" class="action">{{item.reason || item.district}}</view>
         <view class="btns row">
-          <view class="fb fb-danger" data-id="{{item.id}}" data-name="{{item.name}}" bindtap="removePlan">移出计划</view>
-          <view class="fb" data-store="{{item.storeId}}" bindtap="openBrief">看简报</view>
+          <view class="fb fb-more" data-id="{{item.id}}" data-name="{{item.name}}" data-store="{{item.storeId}}" bindtap="morePlan">···</view>
           <view class="fb-primary" data-store="{{item.storeId}}" bindtap="recordStore">到店录音</view>
         </view>
       </view>
@@ -26,7 +25,8 @@
       <view class="sec-title">跟进事项</view>
       <view wx:for="{{open}}" wx:key="id" class="card todo">
         <view class="row between">
-          <text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.storeName}} ›</text>
+          <text wx:if="{{item.storeId}}" class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.storeName}} ›</text>
+          <text wx:else class="faint">{{item.source === 'self' ? '我自己记的' : '不挂门店'}}</text>
           <text class="tag {{item.due.tone}}">{{item.due.text}}</text>
         </view>
         <view class="topic">{{item.topic}}</view>
@@ -37,9 +37,9 @@
           <view wx:if="{{item.progressNote}}" class="faint">{{item.progressNote}}</view>
         </view>
         <view wx:if="{{item.acceptance}}" class="faint">验收：{{item.acceptance}}</view>
+        <view wx:if="{{item.assigneeName && item.source === 'manager'}}" class="faint">上级指派</view>
         <view class="btns row">
-          <view class="fb fb-danger" data-id="{{item.id}}" data-topic="{{item.topic}}" bindtap="removeTodo">删除</view>
-          <view class="fb" data-id="{{item.id}}" bindtap="copy">复制微信话术</view>
+          <view class="fb fb-more" data-id="{{item.id}}" data-topic="{{item.topic}}" bindtap="moreTodo">···</view>
           <view class="fb-primary" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">标记完成</view>
         </view>
       </view>
@@ -57,7 +57,7 @@
       </view>
     </block>
 
-    <empty-state wx:if="{{loaded && !openCount}}" compact title="待办都完成了" desc="今日计划、到期的约定和跟进、待确认的录音，都会出现在这里" />
+    <empty-state wx:if="{{loaded && !openCount}}" compact title="待办都完成了" desc="今日计划、到期的约定和跟进、待确认的录音，都会出现在这里；也可以点下方自己记一条" />
   </block>
 
   <!-- 已完成：今日已去的店 / 完成的跟进事项 -->
@@ -75,7 +75,7 @@
     <block wx:if="{{done.length}}">
       <view class="sec-title">已完成的跟进事项</view>
       <view wx:for="{{done}}" wx:key="id" class="card todo is-done">
-        <view class="row between"><text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.storeName}} ›</text></view>
+        <view class="row between"><text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.storeName}}{{item.storeId ? ' ›' : ''}}</text></view>
         <view class="topic">{{item.topic}}</view>
         <view wx:if="{{item.action}}" class="action">{{item.action}}</view>
         <view class="btns row"><view class="fb" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">撤销完成</view></view>
@@ -83,4 +83,6 @@
     </block>
     <empty-state wx:if="{{loaded && !doneCount}}" compact title="还没有完成的事项" />
   </block>
+  <view style="height:200rpx"></view>
 </view>
+<view class="bottom-bar"><view class="btn-primary" bindtap="addTodo">+ 自己记一条待办</view></view>

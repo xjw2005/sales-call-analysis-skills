@@ -26,6 +26,9 @@ Page({
     getApp().globalData.pendingPractice = scenarioByConcern(e.currentTarget.dataset.name);
     wx.switchTab({ url: '/pages/home/index' });
   },
+  openObjections() {
+    wx.navigateTo({ url: '/pages/objection/index' });
+  },
   copyQuestions() {
     wx.setClipboardData({ data: this.data.brief.questions.map((q, i) => `${i + 1}. ${q}`).join('\n') });
   },

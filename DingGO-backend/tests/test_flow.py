@@ -327,3 +327,10 @@ def test_reanalysis_does_not_bring_back_deleted_or_finished_todos(client, auth):
     assert topics.count((second["topic"], True)) == 1 and (second["topic"], False) not in topics  # 做完的没有多出一份
     assert ("新增的行动", False) in topics  # 新的行动照常加上
     assert len(todos) == 2
+
+
+def test_todo_due_date_can_be_cleared(client, auth):
+    t = client.post("/todos", json={"topic": "送样品", "dueDate": "2026-10-20"}, headers=auth).json()
+    assert t["dueDate"]
+    r = client.patch(f"/todos/{t['id']}", json={"topic": "送样品（两罐）", "clearDueDate": True}, headers=auth).json()
+    assert r["topic"] == "送样品（两罐）" and r["dueDate"] == "" and r["due"]["text"] == "未定日期"

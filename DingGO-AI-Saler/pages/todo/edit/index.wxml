@@ -1,0 +1,34 @@
+<view class="container">
+  <view class="card form">
+    <view class="field">
+      <view class="label">要做什么 <text class="req">*</text></view>
+      <input class="input" value="{{topic}}" maxlength="60" placeholder="例如：周五前把试吃装送到店" placeholder-class="ph" data-key="topic" bindinput="onField" />
+    </view>
+    <view class="field">
+      <view class="label">具体怎么做（选填）</view>
+      <textarea class="input area" value="{{action}}" maxlength="500" auto-height placeholder="例如：带 2 罐试吃装，顺便确认陈列位置" placeholder-class="ph" data-key="action" bindinput="onField" />
+    </view>
+    <view class="field" bindtap="pickStore">
+      <view class="label">门店（选填）</view>
+      <view class="input row between">
+        <text class="{{storeName ? '' : 'ph'}}">{{storeName || '不挂门店'}}</text>
+        <text wx:if="{{storeName && !storeLocked}}" class="faint" catchtap="clearStore">清除</text>
+        <text wx:elif="{{!storeLocked}}" class="faint">选择 ›</text>
+      </view>
+    </view>
+    <picker mode="date" value="{{dueDate || today}}" start="{{today}}" bindchange="onDate">
+      <view class="field">
+        <view class="label">到期日（选填）</view>
+        <view class="input row between">
+          <text class="{{dueDate ? '' : 'ph'}}">{{dueDate || '不定日期'}}</text>
+          <text wx:if="{{dueDate}}" class="faint" catchtap="clearDate">清除</text>
+          <text wx:else class="faint">选择 ›</text>
+        </view>
+      </view>
+    </picker>
+  </view>
+  <view class="faint tip">到期的待办会出现在首页「今日待办」里提醒你。</view>
+</view>
+<view class="bottom-bar">
+  <view class="btn-primary {{saving ? 'disabled' : ''}}" bindtap="save">{{id ? '保存修改' : '添加待办'}}</view>
+</view>

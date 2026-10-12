@@ -52,3 +52,4 @@
 .legacy-tip { text-align: left; margin: 0 0 16rpx; }
 
 .map-link { color: #5b55e8; }
+.more { font-size: 36rpx; font-weight: 700; color: #6b6f8e; padding: 0 8rpx 12rpx 16rpx; line-height: 1; }

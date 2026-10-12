@@ -190,7 +190,7 @@ def list_visits(db: Session, user: User, store_id: int | None = None, scope: str
     elif scope == "visible":
         q = q.where(visit_filter(ids))
     else:
-        q = q.where(Visit.visitor_id.in_(ids))
+        q = q.where(Visit.visitor_id.in_(ids), Visit.deleted_at.is_(None))
     q = q.order_by(Visit.entered_at.desc(), Visit.id.desc())
     return serialize_visits(db, list(db.scalars(q)), full=full)
 
@@ -247,6 +247,8 @@ def summarize_stores(db: Session, stores: list[Store], visits_by_store: dict[str
             "city": store.city,
             "district": store.district,
             "address": store.address,
+            "lat": store.lat,
+            "lng": store.lng,
             "grid": store.grid,
             "installedAt": store.installed_at.isoformat() if store.installed_at else "",
             "wecomAdded": store.wecom_added,
@@ -325,6 +327,7 @@ def list_todos(db: Session, user: User, scope: str = "mine") -> list[dict]:
         select(Todo)
         .where((Todo.assignee_id.in_(ids)) | (Todo.assignee_id.is_(None) & Todo.store_id.in_(own_stores)))
         .where(Todo.status != "cancelled")
+        .where(Todo.store_id.is_(None) | Todo.store_id.not_in(select(Store.id).where(Store.deleted_at.is_not(None))))
         .order_by(Todo.due_date.is_(None), Todo.due_date, Todo.id)
     )
     return serialize_todos(db, list(db.scalars(q)))

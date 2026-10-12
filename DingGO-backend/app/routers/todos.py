@@ -34,6 +34,7 @@ class TodoPatch(BaseModel):
     targetQty: float | None = None
     achievedQty: float | None = None
     progressNote: str | None = None
+    clearDueDate: bool | None = None  # 小程序发请求会去掉空值，清除到期日用这个开关
 
 
 def _accessible(db: Session, user: User, todo_id: int) -> Todo:
@@ -82,6 +83,8 @@ def patch_todo(todo_id: int, body: TodoPatch, db: Session = Depends(get_db), use
     data = body.model_dump(exclude_unset=True)
     if "status" in data:
         _set_status(t, data.pop("status"))
+    if data.pop("clearDueDate", None):
+        t.due_date = None
     mapping = {"topic": "topic", "action": "action", "dueDate": "due_date", "targetQty": "target_qty",
                "achievedQty": "achieved_qty", "progressNote": "progress_note"}
     for field, value in data.items():

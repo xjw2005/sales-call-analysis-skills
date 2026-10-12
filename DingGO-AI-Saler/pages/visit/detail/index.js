@@ -1,7 +1,7 @@
 const config = require('../../../config/index');
 const fmt = require('../../../utils/format');
-const { STATUS } = require('../../../utils/constants');
-const { getVisit, confirmCost, rejudge, retryVisit } = require('../../../services/visit');
+const { STATUS, STORE_CONDITIONS } = require('../../../utils/constants');
+const { getVisit, confirmCost, rejudge, retryVisit, updateVisit, deleteVisit } = require('../../../services/visit');
 
 const TERMINAL = ['done', 'partial_manual', 'invalid_short', 'invalid_content', 'failed', 'cost_pending'];
 const CONCERN_TONE = { 是: 'on', 否: 'off', 证据不足: 'unknown' };
@@ -67,6 +67,8 @@ Page({
     const patch = {
       visit: {
         ...visit,
+        // 确认费用、重试等接口的返回里没有「能不能改」：沿用详情接口给的
+        canEdit: visit.canEdit !== undefined ? visit.canEdit : !!(this.data.visit && this.data.visit.canEdit),
         time: fmt.date(visit.createdAt),
         dur: fmt.duration(visit.durationSec),
         purposes: visit.purposes || [],
@@ -158,6 +160,70 @@ Page({
     } catch (err) {
       wx.showModal({ title: '重新处理', content: err.message, showCancel: false });
     }
+  },
+
+  openStore() {
+    const v = this.data.visit;
+    if (v && v.storeId) wx.navigateTo({ url: `/pages/store/detail/index?id=${v.storeId}` });
+  },
+
+  // ---- 「···」：修改速记 / 门店状况，删除这次拜访 ----
+  sheet(itemList) {
+    return new Promise((resolve) => wx.showActionSheet({ itemList, success: (r) => resolve(itemList[r.tapIndex]), fail: () => resolve('') }));
+  },
+  async more() {
+    const pick = await this.sheet(['修改现场速记', '修改门店状况', '删除这次拜访']);
+    if (pick === '修改现场速记') return this.editNote();
+    if (pick === '修改门店状况') return this.editCondition();
+    if (pick === '删除这次拜访') return this.remove();
+    return undefined;
+  },
+  editNote() {
+    if (!this.data.visit.canEdit) return;
+    wx.showModal({
+      title: '现场速记',
+      editable: true,
+      content: this.data.visit.note || '',
+      placeholderText: '记下这次拜访的要点',
+      success: async (r) => {
+        if (!r.confirm || (r.content || '') === (this.data.visit.note || '')) return;
+        await this.save({ note: (r.content || '').trim() });
+      },
+    });
+  },
+  async editCondition() {
+    const pick = await this.sheet([...STORE_CONDITIONS, '清除']);
+    if (!pick) return undefined;
+    return this.save({ storeCondition: pick === '清除' ? '' : pick });
+  },
+  async save(data) {
+    try {
+      this.render(await updateVisit(this.data.id, data));
+      wx.showToast({ title: '已保存', icon: 'none' });
+    } catch (err) {
+      wx.showToast({ title: err.message, icon: 'none' });
+    }
+  },
+  // 删除：先确认，说清楚会发生什么、能不能找回
+  remove() {
+    wx.showModal({
+      title: '删除这次拜访',
+      content: '删除后拜访列表、门店记录里都不再显示，这次分析生成的未完成待办也会取消。删错了可以找管理员恢复。',
+      confirmText: '删除',
+      confirmColor: '#e5484d',
+      success: async (r) => {
+        if (!r.confirm) return;
+        try {
+          await deleteVisit(this.data.id);
+        } catch (err) {
+          wx.showModal({ title: '没有删除', content: err.message, showCancel: false });
+          return;
+        }
+        this.stopPolling();
+        wx.showToast({ title: '已删除', icon: 'none' });
+        setTimeout(() => wx.navigateBack(), 600);
+      },
+    });
   },
 
   // 点击时间戳：跳到录音对应位置播放

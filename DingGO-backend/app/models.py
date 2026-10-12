@@ -87,6 +87,9 @@ class Store(Base):
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     feishu_record_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 删除只是隐藏：有值就不再出现在任何列表和查询里，管理员可以恢复
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -159,6 +162,8 @@ class Visit(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # 销售看过分析结果的时间
     legacy: Mapped[bool] = mapped_column(Boolean, default=False)  # 从飞书导入：分析结果是原文，不是结构化数据
     feishu_record_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)  # 删除只是隐藏，管理员可恢复
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

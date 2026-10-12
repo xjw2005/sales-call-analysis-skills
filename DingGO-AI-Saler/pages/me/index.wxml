@@ -8,15 +8,21 @@
       </view>
     </view>
 
-    <view class="card stats row">
+    <view class="card stats row" bindtap="openVisits">
       <view class="stat"><view class="num">{{stats.visits}}</view><view class="faint">本月拜访</view></view>
       <view class="stat"><view class="num">{{stats.minutes}}</view><view class="faint">录音分钟</view></view>
       <view class="stat"><view class="num">¥{{stats.cost}}</view><view class="faint">识别费用</view></view>
     </view>
 
+    <view class="group-title">工作</view>
     <view class="card menu">
       <view class="menu-item row between" bindtap="openTodos"><text>我的待办</text><view class="row"><text wx:if="{{todoCount}}" class="todo-badge">{{todoCount}}</text><text class="faint">›</text></view></view>
+      <view class="menu-item row between" bindtap="openObjections"><text>常见异议与应对话术</text><text class="faint">›</text></view>
       <view wx:if="{{!useMock}}" class="menu-item row between" bindtap="openMemory"><text>助手记住了什么</text><text class="faint">›</text></view>
+    </view>
+
+    <view class="group-title">设置与说明</view>
+    <view class="card menu">
       <view class="menu-item row between" bindtap="showPrivacy"><text>隐私与录音告知</text><text class="faint">›</text></view>
       <view class="menu-item row between" bindtap="clearChats"><text>清空助手对话记录</text><text class="faint">›</text></view>
       <view class="menu-item row between" bindtap="showAbout"><text>关于</text><text class="faint">›</text></view>

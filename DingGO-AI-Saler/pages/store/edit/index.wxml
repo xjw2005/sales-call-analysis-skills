@@ -1,8 +1,8 @@
-<view class="container">
+<view class="container" wx:if="{{loaded}}">
   <view class="card form">
     <view class="field">
       <view class="label">门店名称 <text class="req">*</text></view>
-      <input class="input" placeholder="例如：宝贝乐母婴店" placeholder-class="ph" data-key="name" bindinput="onField" />
+      <input class="input" value="{{name}}" placeholder="例如：宝贝乐母婴店" placeholder-class="ph" data-key="name" bindinput="onField" />
     </view>
     <picker mode="region" level="city" bindchange="onRegion">
       <view class="field">
@@ -11,12 +11,32 @@
       </view>
     </picker>
     <view class="field">
-      <view class="label row between">详细地址<text class="btn-soft" bindtap="chooseLocation">地图选点</text></view>
+      <view class="label row between">详细地址<text class="btn-soft" bindtap="chooseLocation">{{hasPoint ? '重新选点' : '地图选点'}}</text></view>
       <input class="input" value="{{address}}" placeholder="街道门牌号" placeholder-class="ph" data-key="address" bindinput="onField" />
+      <view wx:if="{{hasPoint}}" class="faint loc">已记下门店坐标</view>
+    </view>
+    <picker range="{{coopOpts}}" value="{{coopIndex}}" bindchange="onCoop">
+      <view class="field">
+        <view class="label">合作状态</view>
+        <view class="input row between">{{coopOpts[coopIndex]}}<text class="faint">›</text></view>
+      </view>
+    </picker>
+  </view>
+
+  <view class="card form">
+    <view class="field">
+      <view class="label">联系人（选填）</view>
+      <input class="input" value="{{contactName}}" placeholder="例如：王老板" placeholder-class="ph" data-key="contactName" bindinput="onField" />
+    </view>
+    <view class="field">
+      <view class="label">联系电话（选填）</view>
+      <input class="input" type="number" value="{{contactPhone}}" placeholder="只有你和你的上级能看到" placeholder-class="ph" data-key="contactPhone" bindinput="onField" />
     </view>
   </view>
   <view class="faint tip">地址会作为可信信息写入门店档案「门店基本信息」。</view>
+  <view wx:if="{{id && canManage}}" class="danger-link" bindtap="remove">删除这家门店</view>
+  <view style="height:200rpx"></view>
 </view>
 <view class="bottom-bar">
-  <view class="btn-primary {{saving ? 'disabled' : ''}}" bindtap="save">保存门店</view>
+  <view class="btn-primary {{saving || !canManage ? 'disabled' : ''}}" bindtap="save">{{id ? '保存修改' : '保存门店'}}</view>
 </view>

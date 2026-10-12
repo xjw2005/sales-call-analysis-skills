@@ -9,6 +9,14 @@ const seed = require('../model/seed');
 const DAY = 24 * 3600 * 1000;
 const DONE_KEY = 'todoDone';
 const CANCEL_KEY = 'todoCancelled'; // 演示模式：删除的待办记在本机
+const OWN_KEY = 'todoOwn'; // 演示模式：自己新建的待办
+const EDIT_KEY = 'todoEdits'; // 演示模式：改过的待办内容
+
+// 「2026-10-20」这一天北京时间的最后一刻（不受手机 / 电脑时区影响，和显示口径一致）
+function bjEndOfDay(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return Date.UTC(y, m - 1, d, 15, 59, 59, 999);
+}
 
 function endOfDay(ts) {
   const d = new Date(ts);
@@ -57,7 +65,49 @@ async function listTodos() {
     dueAt: goalDue, due: dueText(goalDue), dueDate: fmt.date(goalDue).split(' ')[0], done: done.indexOf('t-goal-s1') >= 0,
     targetQty: 60, achievedQty: 36, gapQty: 24, unit: '罐', progressNote: '月中下单，本月指标已和老板确认。',
   });
-  return delay(todos.filter((t) => cancelled.indexOf(t.id) < 0).sort((a, b) => a.dueAt - b.dueAt));
+  // 销售自己建的待办（演示模式存在本机）；改过的内容覆盖原内容
+  const edits = storage.get(EDIT_KEY, {});
+  storage.get(OWN_KEY, []).forEach((t) => {
+    const dueAt = t.dueDate ? bjEndOfDay(t.dueDate) : null;
+    const store = seed.stores.find((s) => s.id === t.storeId);
+    todos.push({
+      owner: '销售', timeframe: '', reason: '', acceptance: '', visitId: '', targetQty: null, achievedQty: null, gapQty: null, unit: '', progressNote: '',
+      ...t, source: 'self', storeName: store ? store.name : '', dueAt, dueDate: dueAt ? fmt.date(dueAt).split(' ')[0] : '',
+      due: dueAt ? dueText(dueAt) : { text: '未定日期', tone: 'muted', days: 9999 },
+      done: done.indexOf(t.id) >= 0,
+    });
+  });
+  const list = todos.map((t) => (edits[t.id] ? { ...t, ...edits[t.id] } : t));
+  return delay(list.filter((t) => cancelled.indexOf(t.id) < 0).sort((a, b) => (a.dueAt || Infinity) - (b.dueAt || Infinity)));
+}
+
+// 自己新建一条待办（可挂在某家店下，可定到期日）；经理可以通过 assigneeId 指派给下属
+function createTodo({ topic, action = '', storeId, dueDate, assigneeId }) {
+  if (!config.useMock) return request({ url: '/todos', method: 'POST', data: { topic, action, storeId: storeId || null, dueDate: dueDate || null, assigneeId: assigneeId || null } });
+  const t = { id: `own${Date.now()}`, topic, action, storeId: storeId || '', dueDate: dueDate || '' };
+  storage.set(OWN_KEY, [...storage.get(OWN_KEY, []), t]);
+  return delay(t, 100);
+}
+
+// 修改待办的内容或到期日（AI 生成的说法不准，可以自己改）
+function updateTodo(id, { topic, action, dueDate }) {
+  const data = {};
+  if (topic !== undefined) data.topic = topic;
+  if (action !== undefined) data.action = action;
+  // 请求会去掉空值，所以「清除到期日」要明确告诉后端
+  if (dueDate) data.dueDate = dueDate;
+  else if (dueDate !== undefined) data.clearDueDate = true;
+  if (!config.useMock) return request({ url: `/todos/${id}`, method: 'PATCH', data });
+  const edits = storage.get(EDIT_KEY, {});
+  const patch = { ...data };
+  if (dueDate) {
+    const dueAt = bjEndOfDay(dueDate);
+    Object.assign(patch, { dueAt, due: dueText(dueAt), dueDate: fmt.date(dueAt).split(' ')[0] });
+  } else if (dueDate !== undefined) {
+    Object.assign(patch, { dueAt: null, due: { text: '未定日期', tone: 'muted', days: 9999 }, dueDate: '' });
+  }
+  storage.set(EDIT_KEY, { ...edits, [id]: { ...(edits[id] || {}), ...patch } });
+  return delay(true, 100);
 }
 
 function setTodoDone(id, isDone) {
@@ -92,4 +142,4 @@ async function loadTodoCenter() {
   };
 }
 
-module.exports = { listTodos, setTodoDone, cancelTodo, loadTodoCenter };
+module.exports = { listTodos, setTodoDone, cancelTodo, createTodo, updateTodo, loadTodoCenter };

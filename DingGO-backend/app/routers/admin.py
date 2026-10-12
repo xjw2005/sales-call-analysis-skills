@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import require_admin
 from ..config import get_settings
-from ..models import BindCode, User, Visit, utcnow
+from ..models import BindCode, Store, User, Visit, utcnow
 from ..security import hash_bind_code
 from ..services.accounts import MergeRefused, bind_wechat
 from ..services.constants import USER_ROLES
@@ -124,6 +124,42 @@ def import_analysis(visit_id: int, body: AnalysisIn, db: Session = Depends(get_d
         raise HTTPException(status_code=404, detail="拜访记录不存在")
     apply_analysis(db, v, body.analysis, body.transcript)
     return serialize_visit(db, v, full=True)
+
+
+@router.get("/deleted")
+def list_deleted(db: Session = Depends(get_db)):
+    """销售删除（隐藏）的门店和拜访，最近删除的在前：用来核对、恢复"""
+    names = {u.id: u.name for u in db.scalars(select(User))}
+    stores = db.scalars(select(Store).where(Store.deleted_at.is_not(None)).order_by(Store.deleted_at.desc())).all()
+    visits = db.scalars(select(Visit).where(Visit.deleted_at.is_not(None)).order_by(Visit.deleted_at.desc())).all()
+    store_names = {s.id: s.name for s in db.scalars(select(Store).where(Store.id.in_({v.store_id for v in visits})))}
+    return {
+        "stores": [{"id": str(s.id), "name": s.name, "deletedAt": s.deleted_at.isoformat(), "deletedBy": names.get(s.deleted_by, "")} for s in stores],
+        "visits": [{"id": str(v.id), "storeName": store_names.get(v.store_id, ""), "stage": v.stage, "status": v.status,
+                    "enteredAt": v.entered_at.isoformat(), "deletedAt": v.deleted_at.isoformat(), "deletedBy": names.get(v.deleted_by, "")} for v in visits],
+    }
+
+
+@router.post("/stores/{store_id}/restore")
+def restore_store(store_id: int, db: Session = Depends(get_db)):
+    """恢复被删除的门店（删除时取消的待办不会自动恢复）"""
+    s = db.get(Store, store_id)
+    if s is None or s.deleted_at is None:
+        raise HTTPException(status_code=404, detail="没有这家被删除的门店")
+    s.deleted_at, s.deleted_by = None, None
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/visits/{visit_id}/restore")
+def restore_visit(visit_id: int, db: Session = Depends(get_db)):
+    """恢复被删除的拜访（删除时取消的待办不会自动恢复）"""
+    v = db.get(Visit, visit_id)
+    if v is None or v.deleted_at is None:
+        raise HTTPException(status_code=404, detail="没有这条被删除的拜访")
+    v.deleted_at, v.deleted_by = None, None
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/visits/{visit_id}/retry")

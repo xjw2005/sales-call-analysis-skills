@@ -58,7 +58,28 @@ Page({
     });
   },
   openStore(e) {
-    wx.navigateTo({ url: `/pages/store/detail/index?id=${e.currentTarget.dataset.id}` });
+    if (e.currentTarget.dataset.id) wx.navigateTo({ url: `/pages/store/detail/index?id=${e.currentTarget.dataset.id}` });
+  },
+  addTodo() {
+    wx.navigateTo({ url: '/pages/todo/edit/index' });
+  },
+
+  // ---- 「···」：次要操作收在这里，卡片上只留一个主按钮 ----
+  sheet(itemList) {
+    return new Promise((resolve) => wx.showActionSheet({ itemList, success: (r) => resolve(itemList[r.tapIndex]), fail: () => resolve('') }));
+  },
+  async morePlan(e) {
+    const pick = await this.sheet(['看进店简报', '移出今日计划']);
+    if (pick === '看进店简报') return this.openBrief(e);
+    if (pick === '移出今日计划') return this.removePlan(e);
+    return undefined;
+  },
+  async moreTodo(e) {
+    const pick = await this.sheet(['修改', '复制微信跟进话术', '删除']);
+    if (pick === '修改') return wx.navigateTo({ url: `/pages/todo/edit/index?id=${e.currentTarget.dataset.id}` });
+    if (pick === '复制微信跟进话术') return this.copy(e);
+    if (pick === '删除') return this.removeTodo(e);
+    return undefined;
   },
   // 今日计划里的店：看简报 / 到店录音 / 看拜访
   openBrief(e) {

@@ -13,4 +13,5 @@
 .q-num { width: 40rpx; height: 40rpx; border-radius: 50%; background: #eeedfd; color: #5b55e8; font-size: 22rpx; text-align: center; line-height: 40rpx; margin-right: 16rpx; flex-shrink: 0; margin-top: 4rpx; }
 .q-text { flex: 1; }
 .says { margin-bottom: 12rpx; line-height: 1.6; }
+.more-obj { text-align: center; margin: 8rpx 0 24rpx; }
 .point { font-size: 27rpx; line-height: 1.8; color: #4a4d6b; }

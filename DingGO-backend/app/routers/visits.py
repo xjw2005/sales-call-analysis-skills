@@ -9,13 +9,13 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..db import get_db
 from ..deps import current_user
-from ..models import CorrectionEvent, User, Visit, VisitAnalysis, VisitSegment, VisitTranscript, utcnow
+from ..models import CorrectionEvent, Todo, User, Visit, VisitAnalysis, VisitPlan, VisitSegment, VisitTranscript, utcnow
 from ..ai import worker
 from ..services import plans as plan_service
 from ..services import storage
-from ..services.access import actionable_visit, visible_store, visible_visit
+from ..services.access import actionable_visit, team_ids, visible_store, visible_visit
 from ..services.audio import duration_ms
-from ..services.constants import ANALYZED, BUSINESS_LINES, FIRST_STAGE, STAGES, STORE_CONDITIONS
+from ..services.constants import ANALYZED, BUSINESS_LINES, FIRST_STAGE, PROCESSING, STAGES, STORE_CONDITIONS
 from ..services.summary import list_visits, serialize_visit
 
 router = APIRouter(prefix="/visits", tags=["拜访"])
@@ -124,7 +124,9 @@ def get_visit(visit_id: int, db: Session = Depends(get_db), user: User = Depends
     if v.status in ANALYZED and v.reviewed_at is None and v.visitor_id == user.id:
         v.reviewed_at = utcnow()
         db.commit()
-    return serialize_visit(db, v, full=True)
+    out = serialize_visit(db, v, full=True)
+    out["canEdit"] = v.visitor_id in team_ids(db, user)  # 拜访人本人或其上级才能改、删
+    return out
 
 
 @router.patch("/{visit_id}")
@@ -147,6 +149,22 @@ def update_visit(visit_id: int, body: VisitPatch, db: Session = Depends(get_db),
         v.left_at = _from_ms(body.leftAt)
     db.commit()
     return serialize_visit(db, v, full=True)
+
+
+@router.delete("/{visit_id}")
+def delete_visit(visit_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """删除一条拜访（录错门店、测试录音等）：只是隐藏，管理员可恢复。
+    这次拜访生成的未完成待办一并取消；今日计划里因它标成「已去」的店改回「待去」"""
+    v = actionable_visit(db, user, visit_id)
+    if v.status in PROCESSING and v.status != "uploading":
+        raise HTTPException(status_code=409, detail="这条录音正在识别分析，请等处理完再删除")
+    v.deleted_at, v.deleted_by = utcnow(), user.id
+    for t in db.scalars(select(Todo).where(Todo.visit_id == v.id, Todo.status == "open")):
+        t.status = "cancelled"
+    for p in db.scalars(select(VisitPlan).where(VisitPlan.visit_id == v.id)):
+        p.status, p.visit_id = "planned", None
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/{visit_id}/segments")

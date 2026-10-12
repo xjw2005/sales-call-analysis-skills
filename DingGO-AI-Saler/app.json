@@ -10,6 +10,7 @@
     "pages/store/edit/index",
     "pages/brief/index",
     "pages/todo/index",
+    "pages/todo/edit/index",
     "pages/objection/index",
     "pages/store/pick/index",
     "pages/memory/index",

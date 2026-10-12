@@ -627,11 +627,314 @@ test('待办页：删除或移出失败时提示原因，列表不刷新（避�
   assert.strictEqual(calls.load, 0);
 });
 
-test('待办页：界面上有「移出计划」和「删除」按钮，并且只在待办里出现', () => {
+test('待办页：「移出计划」「删除」收在「···」里，并且只在待办里出现', async () => {
   const wxml = fs.readFileSync(path.join(ROOT, 'pages/todo/index.wxml'), 'utf8');
-  assert.ok(wxml.includes('bindtap="removePlan"') && wxml.includes('bindtap="removeTodo"'));
-  const [openPart] = wxml.split('<!-- 已完成');
-  assert.ok(openPart.includes('bindtap="removePlan"') && openPart.includes('bindtap="removeTodo"'));
+  const [openPart, donePart] = wxml.split('<!-- 已完成');
+  assert.ok(openPart.includes('bindtap="morePlan"') && openPart.includes('bindtap="moreTodo"'));
+  assert.ok(!donePart.includes('morePlan') && !donePart.includes('moreTodo'));
+  // 「···」里选的项真的走到移出 / 删除
+  const answers = ['移出今日计划', '删除'];
+  const { page, calls } = todoPage();
+  global.wx.showActionSheet = (o) => o.success({ tapIndex: o.itemList.indexOf(answers.shift()) });
+  await page.morePlan(ds({ id: 'p1', name: '甲店', store: 's1' }));
+  await page.moreTodo(ds({ id: 't1', topic: '送物料' }));
+  assert.deepStrictEqual([calls.removePlan, calls.cancel], [['p1'], ['t1']]);
+});
+
+test('待办页：「···」里可以修改、看简报；底部可以自己记一条', async () => {
+  const answers = ['修改', '看进店简报'];
+  const { page, log } = todoPage();
+  global.wx.showActionSheet = (o) => o.success({ tapIndex: o.itemList.indexOf(answers.shift()) });
+  await page.moreTodo(ds({ id: 't7', topic: 'x' }));
+  await page.morePlan(ds({ id: 'p1', name: '甲店', store: 's1' }));
+  page.addTodo();
+  assert.deepStrictEqual(log.navigations, ['navigateTo:/pages/todo/edit/index?id=t7', 'navigateTo:/pages/brief/index?storeId=s1', 'navigateTo:/pages/todo/edit/index']);
+});
+
+// ---------- 新建 / 修改待办 ----------
+test('新建待办：没写内容不提交；带门店和日期提交，成功后返回', async () => {
+  const created = [];
+  const { page, log } = mountPage('pages/todo/edit/index.js', {
+    stubs: {
+      'services/todo.js': { createTodo: async (d) => { created.push(d); return { id: 'n1' }; }, updateTodo: async () => true, listTodos: async () => [] },
+      'services/store.js': { listStores: async () => [{ id: 's1', name: '甲店' }] },
+    },
+  });
+  await page.onLoad({ storeId: 's1' });
+  assert.strictEqual(page.data.storeName, '甲店');
+  await page.save();
+  assert.ok(log.toasts.includes('先写下要做什么') && created.length === 0);
+  page.onField({ currentTarget: { dataset: { key: 'topic' } }, detail: { value: ' 送试吃装 ' } });
+  page.onDate({ detail: { value: '2026-10-20' } });
+  await page.save();
+  assert.deepStrictEqual(created, [{ topic: '送试吃装', action: '', storeId: 's1', dueDate: '2026-10-20' }]);
+});
+
+test('修改待办：带出原内容（日期转成 年-月-日），门店不能换，保存走修改', async () => {
+  const updated = [];
+  const dueAt = Date.UTC(2026, 9, 20, 15, 59); // 北京时间 10 月 20 日晚上
+  const { page } = mountPage('pages/todo/edit/index.js', {
+    stubs: {
+      'services/todo.js': { createTodo: async () => ({}), updateTodo: async (id, d) => { updated.push([id, d]); }, listTodos: async () => [{ id: 't1', topic: '送样', action: '', storeId: 's1', storeName: '甲店', dueAt }] },
+      'services/store.js': { listStores: async () => [] },
+    },
+  });
+  await page.onLoad({ id: 't1' });
+  assert.deepStrictEqual([page.data.topic, page.data.dueDate, page.data.storeLocked], ['送样', '2026-10-20', true]);
+  page.pickStore();
+  page.clearStore();
+  assert.strictEqual(page.data.storeId, 's1');
+  page.clearDate();
+  await page.save();
+  assert.deepStrictEqual(updated, [['t1', { topic: '送样', action: '', dueDate: '' }]]);
+});
+
+test('待办服务：新建、修改的请求地址和内容正确', async () => {
+  const seen = [];
+  mountPage('pages/me/index.js', {
+    config: { useMock: false, transport: 'http', baseUrl: 'http://x' },
+    storage: { token: 'T' },
+    stubs: { 'services/visit.js': { listVisits: async () => [] } },
+    onWx: (wx) => { wx.request = (o) => { seen.push(o); o.success({ statusCode: 200, data: {} }); }; },
+  });
+  const { createTodo, updateTodo } = require(path.join(ROOT, 'services/todo.js'));
+  await createTodo({ topic: '送样', storeId: 's1', dueDate: '2026-10-20' });
+  await updateTodo('7', { topic: '送样品', dueDate: '' });
+  assert.deepStrictEqual(seen.map((o) => [o.method, o.url, o.data]), [
+    ['POST', 'http://x/todos', { topic: '送样', action: '', storeId: 's1', dueDate: '2026-10-20' }],
+    ['PATCH', 'http://x/todos/7', { topic: '送样品', clearDueDate: true }], // 空值会被请求层去掉，所以用开关
+  ]);
+});
+
+test('演示模式：自己记的待办出现在列表里，改过的内容生效', async () => {
+  mountPage('pages/me/index.js', { config: { useMock: true, mockAI: true }, stubs: {} });
+  const { listTodos, createTodo, updateTodo } = require(path.join(ROOT, 'services/todo.js'));
+  const t = await createTodo({ topic: '自己记的', storeId: 's1', dueDate: '2030-01-02' });
+  await updateTodo(t.id, { topic: '改过的' });
+  const mine = (await listTodos()).find((x) => x.id === t.id);
+  assert.deepStrictEqual([mine.topic, mine.storeName, mine.dueDate, mine.source], ['改过的', '宝贝乐母婴店', '1月2日', 'self']);
+});
+
+// ---------- 门店：编辑 / 删除 / 枢纽 ----------
+function storeEdit({ getStore, updateStore, deleteStore, createStore, modals } = {}) {
+  const calls = { update: [], del: [], create: [] };
+  const env = mountPage('pages/store/edit/index.js', {
+    modals,
+    stubs: {
+      'services/store.js': {
+        getStore: getStore || (async () => ({ id: 's1', name: '甲店', province: '重庆市', city: '渝北区', address: '新南路', cooperationStatus: '意向中', contactName: '王老板', contactPhone: '13800000000', lat: 29.6, lng: 106.5, canManage: true })),
+        updateStore: updateStore || (async (id, d) => { calls.update.push([id, d]); }),
+        deleteStore: deleteStore || (async (id) => { calls.del.push(id); }),
+        createStore: createStore || (async (d) => { calls.create.push(d); return { id: 'new' }; }),
+      },
+    },
+  });
+  return { ...env, calls };
+}
+
+test('编辑门店：带出原资料，改合作状态后保存走修改（带坐标）', async () => {
+  const { page, calls } = storeEdit();
+  await page.onLoad({ id: 's1' });
+  assert.deepStrictEqual([page.data.name, page.data.coopOpts[page.data.coopIndex], page.data.hasPoint], ['甲店', '意向中', true]);
+  page.onCoop({ detail: { value: 0 } });
+  await page.save();
+  assert.deepStrictEqual(calls.update, [['s1', { name: '甲店', province: '重庆市', city: '渝北区', address: '新南路', cooperationStatus: '已合作', contactName: '王老板', contactPhone: '13800000000', lat: 29.6, lng: 106.5 }]]);
+});
+
+test('编辑门店：电话格式不对不提交', async () => {
+  const { page, calls, log } = storeEdit();
+  await page.onLoad({ id: 's1' });
+  page.onField({ currentTarget: { dataset: { key: 'contactPhone' } }, detail: { value: 'abc' } });
+  await page.save();
+  assert.ok(log.toasts.includes('电话格式不对') && !calls.update.length);
+});
+
+test('删除门店：先确认；后端拒绝（已有拜访）时弹出原因，不跳走', async () => {
+  const { page, calls, log } = storeEdit({ modals: [{ confirm: false }, { confirm: true }, { confirm: true }], deleteStore: async () => { throw new Error('这家店已有 2 次拜访记录，不能删除'); } });
+  await page.onLoad({ id: 's1' });
+  page.remove();
+  await tick();
+  assert.strictEqual(calls.del.length, 0);
+  page.remove();
+  await tick();
+  assert.ok(log.modals.some((m) => m.title === '不能删除' && m.content.includes('2 次拜访')));
+  assert.ok(!log.toasts.includes('已删除'));
+});
+
+test('删除门店：成功后清掉「当前门店」并回到门店列表', async () => {
+  const { page, calls, app, log } = storeEdit();
+  app.globalData.currentStoreId = 's1';
+  await page.onLoad({ id: 's1' });
+  page.remove();
+  await tick();
+  assert.deepStrictEqual(calls.del, ['s1']);
+  assert.strictEqual(app.globalData.currentStoreId, '');
+  await new Promise((r) => setTimeout(r, 650));
+  assert.ok(log.navigations.includes('switchTab:/pages/store/list/index'));
+});
+
+function storeDetail({ store = {}, stubs = {} } = {}) {
+  const calls = { profile: [], update: [], done: [] };
+  const base = { id: 's1', name: '甲店', cooperationStatus: '意向中', canManage: true, loops: [], visits: [], todos: [], actions: [], metrics: {},
+    profile: { sourceCount: 1, sections: [{ key: 'basic', label: '门店基本信息', state: '未确认', content: '未确认' }] }, contactPhone: '138', ...store };
+  const env = mountPage('pages/store/detail/index.js', {
+    stubs: {
+      'services/store.js': {
+        getStore: async () => JSON.parse(JSON.stringify(base)),
+        submitCorrection: async () => true,
+        updateStore: async (id, d) => { calls.update.push([id, d]); },
+        editProfile: async (id, key, content, state) => { calls.profile.push([id, key, content, state]); },
+      },
+      'services/todo.js': { setTodoDone: async (id, d) => { calls.done.push([id, d]); }, cancelTodo: async () => true },
+      ...stubs,
+    },
+    onWx: (wx) => { wx.makePhoneCall = (o) => { calls.phone = o.phoneNumber; }; },
+  });
+  return { ...env, calls };
+}
+
+test('门店详情：快捷入口都能到对应页面，「问助手」把这家店设为当前门店', async () => {
+  const { page, log, app } = storeDetail();
+  page.onLoad({ id: 's1' });
+  await page.load();
+  page.brief();
+  page.addTodo();
+  page.edit();
+  page.ask();
+  assert.deepStrictEqual(log.navigations, ['navigateTo:/pages/brief/index?storeId=s1', 'navigateTo:/pages/todo/edit/index?storeId=s1', 'navigateTo:/pages/store/edit/index?id=s1', 'switchTab:/pages/home/index']);
+  assert.strictEqual(app.globalData.currentStoreId, 's1');
+  assert.strictEqual(app.globalData.askHint, '甲店');
+});
+
+test('门店详情：点档案某一项可以直接改；点合作状态可以直接换；点电话能拨号', async () => {
+  const { page, calls } = storeDetail();
+  page.onLoad({ id: 's1' });
+  await page.load();
+  global.wx.showModal = (o) => o.success({ confirm: true, content: '面积约 80 平' });
+  page.editSection({ currentTarget: { dataset: { key: 'basic', label: '门店基本信息' } } });
+  await tick();
+  assert.deepStrictEqual(calls.profile, [['s1', 'basic', '面积约 80 平', '当前状态']]);
+  global.wx.showActionSheet = (o) => o.success({ tapIndex: o.itemList.indexOf('已合作') });
+  await page.changeCoop();
+  assert.deepStrictEqual(calls.update, [['s1', { cooperationStatus: '已合作' }]]);
+  page.call();
+  assert.strictEqual(calls.phone, '138');
+});
+
+test('门店详情：没有权限的人点档案、合作状态都不会改', async () => {
+  const { page, calls } = storeDetail({ store: { canManage: false } });
+  page.onLoad({ id: 's1' });
+  await page.load();
+  let asked = 0;
+  global.wx.showModal = () => { asked += 1; };
+  global.wx.showActionSheet = () => { asked += 1; };
+  page.editSection({ currentTarget: { dataset: { key: 'basic', label: '门店基本信息' } } });
+  await page.changeCoop();
+  assert.strictEqual(asked, 0);
+  assert.deepStrictEqual([calls.profile, calls.update], [[], []]);
+});
+
+test('门店详情：行动闭环里的待办可以完成', async () => {
+  const { page, calls } = storeDetail();
+  page.onLoad({ id: 's1' });
+  global.wx.showActionSheet = (o) => o.success({ tapIndex: 0 });
+  await page.todoAction({ currentTarget: { dataset: { id: 't1', done: false, topic: 'x' } } });
+  assert.deepStrictEqual(calls.done, [['t1', true]]);
+});
+
+// ---------- 拜访：修改 / 删除 ----------
+function visitDetail({ visit = {}, deleteVisit, modals } = {}) {
+  const calls = { update: [], del: [] };
+  const base = { id: 'v1', storeId: 's1', storeName: '甲店', status: 'no_recording', stage: '日常维护', mode: 'daily', createdAt: Date.now(), durationSec: 0, note: '旧速记', canEdit: true, ...visit };
+  const env = mountPage('pages/visit/detail/index.js', {
+    modals,
+    stubs: {
+      'services/visit.js': {
+        getVisit: async () => ({ ...base }),
+        confirmCost: async () => ({ ...base, canEdit: undefined, status: 'asr_running' }),
+        rejudge: async () => true,
+        retryVisit: async () => base,
+        updateVisit: async (id, d) => { calls.update.push([id, d]); return { ...base, ...d, canEdit: undefined }; },
+        deleteVisit: deleteVisit || (async (id) => { calls.del.push(id); }),
+      },
+    },
+  });
+  return { ...env, calls };
+}
+
+test('拜访详情：改速记、改门店状况，保存后「···」还在', async () => {
+  const { page, calls } = visitDetail({ modals: [{ confirm: true, content: '新速记' }] });
+  page.onLoad({ id: 'v1' });
+  await page.load();
+  page.editNote();
+  await tick();
+  global.wx.showActionSheet = (o) => o.success({ tapIndex: o.itemList.indexOf('已闭店') });
+  await page.editCondition();
+  assert.deepStrictEqual(calls.update, [['v1', { note: '新速记' }], ['v1', { storeCondition: '已闭店' }]]);
+  assert.strictEqual(page.data.visit.canEdit, true);
+  page.stopPolling();
+});
+
+test('拜访详情：删除要先确认；删除失败弹原因不返回；成功后返回上一页', async () => {
+  const fail = visitDetail({ modals: [{ confirm: true }], deleteVisit: async () => { throw new Error('这条录音正在识别分析，请等处理完再删除'); } });
+  fail.page.onLoad({ id: 'v1' });
+  fail.page.remove();
+  await tick();
+  assert.ok(fail.log.modals.some((m) => m.title === '没有删除'));
+  assert.ok(!fail.log.navigations.includes('navigateBack'));
+
+  const ok = visitDetail({ modals: [{ confirm: false }, { confirm: true }] });
+  ok.page.onLoad({ id: 'v1' });
+  ok.page.remove();
+  await tick();
+  assert.deepStrictEqual(ok.calls.del, []);
+  ok.page.remove();
+  await tick();
+  assert.deepStrictEqual(ok.calls.del, ['v1']);
+  await new Promise((r) => setTimeout(r, 650));
+  assert.ok(ok.log.navigations.includes('navigateBack'));
+});
+
+test('拜访详情：不能改的人看不到「···」', () => {
+  const wxml = fs.readFileSync(path.join(ROOT, 'pages/visit/detail/index.wxml'), 'utf8');
+  assert.ok(wxml.includes('wx:if="{{visit.canEdit}}" class="more" bindtap="more"'));
+});
+
+test('门店 / 拜访服务：修改、删除的请求地址和方法正确', async () => {
+  const seen = [];
+  mountPage('pages/me/index.js', {
+    config: { useMock: false, transport: 'http', baseUrl: 'http://x' },
+    storage: { token: 'T' },
+    onWx: (wx) => { wx.request = (o) => { seen.push(o); o.success({ statusCode: 200, data: {} }); }; },
+  });
+  const store = require(path.join(ROOT, 'services/store.js'));
+  const visit = require(path.join(ROOT, 'services/visit.js'));
+  await store.updateStore('3', { name: 'a' });
+  await store.deleteStore('3');
+  await store.editProfile('3', 'basic', '内容', '当前状态');
+  await visit.updateVisit('9', { note: 'n' });
+  await visit.deleteVisit('9');
+  assert.deepStrictEqual(seen.map((o) => [o.method, o.url.replace('http://x', '')]), [
+    ['PATCH', '/stores/3'], ['DELETE', '/stores/3'], ['PATCH', '/stores/3/profile/basic'], ['PATCH', '/visits/9'], ['DELETE', '/visits/9'],
+  ]);
+});
+
+test('演示模式：删除拜访后列表里没有了；有拜访的门店不能删，没拜访的能删', async () => {
+  mountPage('pages/me/index.js', { config: { useMock: true, mockAI: true }, stubs: {} });
+  const store = require(path.join(ROOT, 'services/store.js'));
+  const visit = require(path.join(ROOT, 'services/visit.js'));
+  await visit.deleteVisit('v6');
+  assert.ok(!(await visit.listVisits()).some((v) => v.id === 'v6'));
+  await assert.rejects(store.deleteStore('s1'), /拜访记录/);
+  const created = await store.createStore({ name: '新店' });
+  await store.deleteStore(created.id);
+  assert.ok(!(await store.listStores()).some((s) => s.id === created.id));
+});
+
+test('异议应对页有入口：简报页和「我的」都能进', () => {
+  const brief = fs.readFileSync(path.join(ROOT, 'pages/brief/index.wxml'), 'utf8');
+  const me = fs.readFileSync(path.join(ROOT, 'pages/me/index.wxml'), 'utf8');
+  assert.ok(brief.includes('bindtap="openObjections"') && me.includes('bindtap="openObjections"'));
 });
 
 test('删除待办的请求：PATCH 状态为 cancelled', async () => {

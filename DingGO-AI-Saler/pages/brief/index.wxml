@@ -45,6 +45,7 @@
       <view class="quote">“{{item.script}}”</view>
       <view class="link" data-name="{{item.name}}" bindtap="practice">先陪练一下 ›</view>
     </view>
+    <view class="link more-obj" bindtap="openObjections">查看全部常见异议的应对话术 ›</view>
     <view style="height:200rpx"></view>
   </view>
   <view class="bottom-bar"><view class="btn-primary" bindtap="record">到店了，开始录音</view></view>

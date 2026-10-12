@@ -6,7 +6,7 @@
 """
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from ..models import Store, User, Visit
@@ -26,13 +26,14 @@ def team_ids(db: Session, user: User, depth: int = 3) -> list[int]:
 
 
 def store_filter(ids: list[int]):
-    visited = select(Visit.store_id).where(Visit.visitor_id.in_(ids))
-    return or_(Store.primary_sales_id.in_(ids), Store.id.in_(visited))
+    """能看到的门店（已删除的不算；只因一条已删除的拜访而「去过」的店也不算）"""
+    visited = select(Visit.store_id).where(Visit.visitor_id.in_(ids), Visit.deleted_at.is_(None))
+    return and_(Store.deleted_at.is_(None), or_(Store.primary_sales_id.in_(ids), Store.id.in_(visited)))
 
 
 def visit_filter(ids: list[int]):
     owned = select(Store.id).where(Store.primary_sales_id.in_(ids))
-    return or_(Visit.visitor_id.in_(ids), Visit.store_id.in_(owned))
+    return and_(Visit.deleted_at.is_(None), or_(Visit.visitor_id.in_(ids), Visit.store_id.in_(owned)))
 
 
 def visible_store(db: Session, user: User, store_id: int) -> Store:
@@ -52,7 +53,7 @@ def visible_visit(db: Session, user: User, visit_id: int) -> Visit:
 def actionable_visit(db: Session, user: User, visit_id: int) -> Visit:
     """能对拜访做写操作（上传、确认费用、改分析）：拜访人本人或其上级"""
     visit = db.get(Visit, visit_id)
-    if not visit or visit.visitor_id not in team_ids(db, user):
+    if not visit or visit.deleted_at is not None or visit.visitor_id not in team_ids(db, user):
         raise HTTPException(status_code=404, detail="拜访记录不存在")
     return visit
 

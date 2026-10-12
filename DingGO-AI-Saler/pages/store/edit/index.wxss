@@ -6,3 +6,5 @@ picker:last-child .field, .field:last-child { border-bottom: none; }
 .input { font-size: 30rpx; min-height: 44rpx; }
 .ph { color: #a7aac2; }
 .tip { padding: 0 8rpx; }
+.loc { margin-top: 8rpx; }
+.danger-link { text-align: center; color: var(--error); font-size: 28rpx; padding: 48rpx 0 0; }

@@ -3,8 +3,11 @@
     <!-- 头部 -->
     <view class="head">
       <view class="row between">
-        <text class="store">{{visit.storeName}}</text>
-        <text class="tag {{status.tone}}">{{status.text}}</text>
+        <text class="store" bindtap="openStore">{{visit.storeName}} ›</text>
+        <view class="row gap">
+          <text class="tag {{status.tone}}">{{status.text}}</text>
+          <text wx:if="{{visit.canEdit}}" class="more" bindtap="more">···</text>
+        </view>
       </view>
       <view class="row gap meta">
         <text class="tag {{visit.mode === 'first' ? 'primary' : 'muted'}}">{{visit.stage}}</text>
@@ -20,7 +23,7 @@
         <text wx:for="{{visit.purposes}}" wx:key="*this" class="tag primary">{{item}}</text>
         <text wx:if="{{visit.storeCondition}}" class="tag {{visit.storeCondition === '正常运营' ? 'success' : 'warn'}}">{{visit.storeCondition}}</text>
       </view>
-      <view wx:if="{{visit.note}}" class="info-row"><text class="k">现场速记</text><text user-select>{{visit.note}}</text></view>
+      <view wx:if="{{visit.note}}" class="info-row" bindtap="editNote"><text class="k">现场速记</text><text user-select>{{visit.note}}</text></view>
       <view wx:if="{{visit.surveyText}}" class="info-row"><text class="k">门店调研</text>{{visit.surveyText}}</view>
       <view wx:if="{{hasCheckin}}" class="info-row" bindtap="openCheckin"><text class="k">打卡位置</text>{{checkinText}}<text wx:if="{{checkinOnMap}}" class="map-link"> 在地图上看 ›</text></view>
     </view>

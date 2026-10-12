@@ -54,6 +54,12 @@ Page({
       },
     });
   },
+  openObjections() {
+    wx.navigateTo({ url: '/pages/objection/index' });
+  },
+  openVisits() {
+    wx.switchTab({ url: '/pages/visit/list/index' });
+  },
   openMemory() {
     wx.navigateTo({ url: '/pages/memory/index' });
   },

@@ -39,16 +39,61 @@ async function listStores({ fresh = false } = {}) {
   if (!config.useMock) return storeCache.get({ fresh });
   const all = await listVisits();
   return seed.stores
+    .filter((s) => !s.deleted)
     .map((s) => summarize(s, all.filter((v) => v.storeId === s.id)))
     .sort((a, b) => (b.lastVisitAt || b.createdAt) - (a.lastVisitAt || a.createdAt));
 }
 
 async function getStore(id) {
   if (!config.useMock) return request({ url: `/stores/${id}` });
-  const store = seed.stores.find((s) => s.id === id);
+  const store = seed.stores.find((s) => s.id === id && !s.deleted);
   if (!store) throw new Error('门店不存在');
   const visits = await listVisits({ storeId: id });
-  return { ...summarize(store, visits), visits };
+  const out = { ...summarize(store, visits), visits, canManage: true };
+  // 演示模式：手改过的档案维度覆盖分析结果
+  if (out.profile && store.profileEdits) {
+    out.profile = { ...out.profile, sections: out.profile.sections.map((s) => (store.profileEdits[s.key] ? { ...s, ...store.profileEdits[s.key] } : s)) };
+  }
+  return out;
+}
+
+// 修改门店资料（名称、地址、坐标、合作状态、联系人）：门店负责人或其上级才能改
+async function updateStore(id, data) {
+  if (!config.useMock) {
+    const store = await request({ url: `/stores/${id}`, method: 'PATCH', data });
+    cache.invalidate('stores');
+    return store;
+  }
+  const store = seed.stores.find((s) => s.id === id);
+  if (!store) throw new Error('门店不存在');
+  Object.assign(store, data);
+  return delay(store);
+}
+
+// 删除门店：只是隐藏，管理员能恢复；已有拜访的店后端会拒绝（提示改合作状态）
+async function deleteStore(id) {
+  if (!config.useMock) {
+    const res = await request({ url: `/stores/${id}`, method: 'DELETE' });
+    cache.invalidate('stores');
+    return res;
+  }
+  const store = seed.stores.find((s) => s.id === id);
+  const visits = seed.visits.filter((v) => v.storeId === id && !v.deleted).length;
+  if (visits) return delay(null).then(() => { throw new Error(`这家店已有 ${visits} 次拜访记录，不能删除。不再跟进的话，可以把合作状态改掉`); });
+  if (store) store.deleted = true;
+  return delay({ ok: true });
+}
+
+// 直接修改门店档案的某个维度（留纠正记录）
+async function editProfile(id, key, content, state) {
+  if (!config.useMock) {
+    const store = await request({ url: `/stores/${id}/profile/${key}`, method: 'PATCH', data: { content, state } });
+    cache.invalidate('stores');
+    return store;
+  }
+  const store = seed.stores.find((s) => s.id === id);
+  store.profileEdits = { ...(store.profileEdits || {}), [key]: { content, ...(state ? { state } : {}) } };
+  return getStore(id);
 }
 
 // 缓存里已有的门店列表（可能已过期），用来切回页面时先显示、再后台更新；没有或演示模式返回 null
@@ -79,4 +124,4 @@ async function submitCorrection(id, text) {
   return delay(true);
 }
 
-module.exports = { listStores, peekStores, getStore, createStore, submitCorrection };
+module.exports = { listStores, peekStores, getStore, createStore, updateStore, deleteStore, editProfile, submitCorrection };

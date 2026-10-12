@@ -1,6 +1,7 @@
 {
   "navigationBarTitleText": "门店档案",
   "navigationBarBackgroundColor": "#E3E0FF",
+  "enablePullDownRefresh": true,
   "usingComponents": {
     "score-ring": "/components/score-ring/index",
     "visit-card": "/components/visit-card/index",

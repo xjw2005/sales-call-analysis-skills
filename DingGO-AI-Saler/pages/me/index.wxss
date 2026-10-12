@@ -5,6 +5,7 @@
 .stats { justify-content: space-around; text-align: center; }
 .num { font-size: 40rpx; font-weight: 700; color: #2d2a9e; margin-bottom: 6rpx; }
 .menu { padding: 0 32rpx; }
+.group-title { font-size: 24rpx; color: #a7aac2; margin: 32rpx 8rpx 12rpx; }
 .menu-item { padding: 32rpx 0; border-bottom: 2rpx solid #f0f1f6; font-size: 30rpx; }
 .menu-item:last-child { border-bottom: none; }
 .todo-badge { min-width: 40rpx; height: 40rpx; line-height: 40rpx; padding: 0 12rpx; box-sizing: border-box; border-radius: 20rpx; background: #f0544f; color: #fff; font-size: 24rpx; text-align: center; margin-right: 12rpx; }

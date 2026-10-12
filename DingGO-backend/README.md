@@ -377,6 +377,15 @@ alembic upgrade head && uvicorn app.main:app --reload   # 默认用 ./data/dev.d
 - 每人每天最多开始 `DAILY_PRACTICE_LIMIT`（默认 30）次；`turn`、`finish` 和对话共用每分钟频率与并发名额。
 
 
+## 删除门店、拜访（隐藏，可恢复）
+
+销售可以删除录错的拜访、建错的门店。删除只是隐藏（`deleted_at` 有值，迁移 `0009` 容器启动时自动执行），数据还在库里，管理员能恢复。
+
+- `DELETE /visits/{id}`：拜访人本人或其上级。正在识别分析的不能删（等处理完）；这次分析生成的**未完成**待办一并取消；今日计划里因它标成「已去」的店改回「待去」。
+- `DELETE /stores/{id}`：门店负责人或其上级。**已有拜访的店不能删**（避免拜访和档案跟着消失，提示改合作状态）；它的未完成待办取消，还没去的计划移除。
+- 管理员：`GET /admin/deleted` 看删了什么、谁删的；`POST /admin/stores/{id}/restore`、`POST /admin/visits/{id}/restore` 恢复（删除时取消的待办不会自动恢复）。
+- 门店详情多了 `canManage`（能不能改 / 删）、`lat` / `lng`；拜访详情多了 `canEdit`；`PATCH /stores/{id}` 可以改坐标；`PATCH /todos/{id}` 用 `clearDueDate: true` 清除到期日（小程序发请求会去掉空值）。
+
 ## 待办的删除与重新分析
 
 销售可以删除（`PATCH /todos/{id}` 设 `status: cancelled`）或完成（`POST /todos/{id}/done`）一条待办。重新分析同一条拜访（重试、重新判定）时，AI 会重建该拜访下还没处理的待办，但**销售已经删除或完成的，只要话题和内容完全一样，就不再重新生成**，所以删掉的不会回来、做完的不会多出一份。AI 新给出的行动照常加上。

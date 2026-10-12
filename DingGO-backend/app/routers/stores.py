@@ -2,12 +2,14 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import current_user
-from ..models import CorrectionEvent, Store, StoreCorrection, StoreDirectory, StoreProfileSection, User, Visit, VisitAnalysis
+from ..models import (
+    CorrectionEvent, Store, StoreCorrection, StoreDirectory, StoreProfileSection, Todo, User, Visit, VisitAnalysis, VisitPlan, utcnow,
+)
 from ..services.access import is_manager, team_ids, visible_store
 from ..services.constants import COOPERATION_STATUSES, PROFILE_LABELS, PROFILE_STATES
 from ..services.ingest import upsert_profile_section
@@ -46,6 +48,8 @@ class StorePatch(BaseModel):
     contactPhone: str | None = None
     installedAt: date | None = None
     wecomAdded: bool | None = None
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    lng: float | None = Field(default=None, ge=-180, le=180)
 
 
 class CorrectionIn(BaseModel):
@@ -70,7 +74,8 @@ def _can_manage(db: Session, user: User, store: Store) -> bool:
 def _detail(db: Session, user: User, store: Store) -> dict:
     visits = list_visits(db, user, store_id=store.id)
     out = summarize_store(db, store, visits, detail=True)
-    if not (_can_manage(db, user, store) or is_manager(user)):
+    out["canManage"] = _can_manage(db, user, store)  # 小程序据此显示「编辑 / 删除」
+    if not (out["canManage"] or is_manager(user)):
         out.pop("contactName", None)
         out.pop("contactPhone", None)
     return {**out, "visits": visits, "legacyActions": _legacy_actions(db, visits), "todos": [t for t in list_todos(db, user, scope="team") if t["storeId"] == out["id"]]}
@@ -115,7 +120,8 @@ def create_store(body: StoreIn, db: Session = Depends(get_db), user: User = Depe
     if body.platform and body.externalId:
         exists = db.scalars(select(Store).where(Store.platform == body.platform, Store.external_id == body.externalId)).first()
         if exists:
-            raise HTTPException(status_code=409, detail=f"该平台下已有这家门店：{exists.name}")
+            hint = "（已被删除，请联系管理员恢复）" if exists.deleted_at is not None else ""
+            raise HTTPException(status_code=409, detail=f"该平台下已有这家门店：{exists.name}{hint}")
         data["platform"], data["external_id"] = body.platform, body.externalId
         directory = db.scalars(
             select(StoreDirectory).where(StoreDirectory.platform == body.platform, StoreDirectory.external_id == body.externalId)
@@ -146,12 +152,31 @@ def update_store(store_id: int, body: StorePatch, db: Session = Depends(get_db),
     mapping = {
         "name": "name", "province": "province", "city": "city", "district": "district", "address": "address", "grid": "grid",
         "storeType": "store_type", "cooperationStatus": "cooperation_status", "contactName": "contact_name",
-        "contactPhone": "contact_phone", "installedAt": "installed_at", "wecomAdded": "wecom_added",
+        "contactPhone": "contact_phone", "installedAt": "installed_at", "wecomAdded": "wecom_added", "lat": "lat", "lng": "lng",
     }
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(store, mapping[field], value)
     db.commit()
     return _detail(db, user, store)
+
+
+@router.delete("/{store_id}")
+def delete_store(store_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """删除门店（建错、重复的店）：只是隐藏，管理员可恢复。已有拜访的店不能删，避免拜访和档案跟着消失；
+    它的未完成待办取消，还没去的计划移除"""
+    store = visible_store(db, user, store_id)
+    if not _can_manage(db, user, store):
+        raise HTTPException(status_code=403, detail="只有门店负责人或其上级能删除门店")
+    visits = db.scalar(select(func.count(Visit.id)).where(Visit.store_id == store.id, Visit.deleted_at.is_(None))) or 0
+    if visits:
+        raise HTTPException(status_code=409, detail=f"这家店已有 {visits} 次拜访记录，不能删除。不再跟进的话，可以把合作状态改掉")
+    store.deleted_at, store.deleted_by = utcnow(), user.id
+    for t in db.scalars(select(Todo).where(Todo.store_id == store.id, Todo.status == "open")):
+        t.status = "cancelled"
+    for p in db.scalars(select(VisitPlan).where(VisitPlan.store_id == store.id, VisitPlan.status == "planned")):
+        db.delete(p)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/{store_id}/corrections")

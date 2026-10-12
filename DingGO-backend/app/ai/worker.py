@@ -201,7 +201,7 @@ def _profile_text(db: Session, store_id: int) -> tuple[str, str]:
 def _actions_text(db: Session, visit: Visit) -> str:
     """该门店上一次（早于本次）已分析拜访的「下一步行动策略」，日常拜访用来做闭环判断；没有则返回空串"""
     prev = db.scalars(select(Visit).where(Visit.store_id == visit.store_id, Visit.id != visit.id, Visit.entered_at < visit.entered_at,
-                                          Visit.status.in_(["done", "partial_manual"])).order_by(Visit.entered_at.desc())).first()
+                                          Visit.deleted_at.is_(None), Visit.status.in_(["done", "partial_manual"])).order_by(Visit.entered_at.desc())).first()
     if prev is None:
         return ""
     row = db.scalars(select(VisitAnalysis).where(VisitAnalysis.visit_id == prev.id, VisitAnalysis.module == "next-action")).first()

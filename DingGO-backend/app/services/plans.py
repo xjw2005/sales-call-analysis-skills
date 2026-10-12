@@ -45,7 +45,7 @@ def _last_visits(db: Session, user: User, store_ids: list[int]) -> dict[int, obj
     out: dict[int, object] = {}
     for i in range(0, len(store_ids), 500):
         chunk = store_ids[i:i + 500]
-        for sid, at in db.execute(select(Visit.store_id, func.max(Visit.entered_at)).where(Visit.store_id.in_(chunk)).group_by(Visit.store_id)):
+        for sid, at in db.execute(select(Visit.store_id, func.max(Visit.entered_at)).where(Visit.store_id.in_(chunk), Visit.deleted_at.is_(None)).group_by(Visit.store_id)):
             out[sid] = at
     return out
 
@@ -150,7 +150,7 @@ def districts(db: Session, user: User, limit: int = 8) -> list[dict]:
     last = _last_visits(db, user, [r.id for r in rows])
     since = utcnow() - timedelta(days=30)
     mine = {sid: n for sid, n in db.execute(
-        select(Visit.store_id, func.count(Visit.id)).where(Visit.visitor_id == user.id, Visit.entered_at >= since).group_by(Visit.store_id))}
+        select(Visit.store_id, func.count(Visit.id)).where(Visit.visitor_id == user.id, Visit.entered_at >= since, Visit.deleted_at.is_(None)).group_by(Visit.store_id))}
     groups: dict[str, dict] = {}
     for r in rows:
         if not r.district:
@@ -260,7 +260,7 @@ def recent(db: Session, user: User, days: int = 14, limit: int = 10) -> list[dic
     rows = {r.id: r for r in _store_rows(db, user)}
     since = utcnow() - timedelta(days=days)
     last = {sid: at for sid, at in db.execute(
-        select(Visit.store_id, func.max(Visit.entered_at)).where(Visit.visitor_id.in_(ids), Visit.entered_at >= since).group_by(Visit.store_id))}
+        select(Visit.store_id, func.max(Visit.entered_at)).where(Visit.visitor_id.in_(ids), Visit.entered_at >= since, Visit.deleted_at.is_(None)).group_by(Visit.store_id))}
     open_by_store: dict[int, list[Todo]] = {}
     for t in _open_todos(db, user):
         open_by_store.setdefault(t.store_id, []).append(t)
@@ -332,6 +332,8 @@ def _serialize(db: Session, plans: list[VisitPlan]) -> list[dict]:
     out = []
     for p in plans:
         s = db.get(Store, p.store_id)
+        if s is None or s.deleted_at is not None:  # 门店已删除：计划里不再显示
+            continue
         dist = db.scalar(select(district_expr()).select_from(Store).outerjoin(StoreDirectory, Store.directory_id == StoreDirectory.id).where(Store.id == p.store_id))
         out.append({
             "id": str(p.id), "storeId": str(p.store_id), "name": s.name if s else "", "district": dist or "",
@@ -355,7 +357,7 @@ def add(db: Session, user: User, store_ids: list[int], source: str, reasons: dic
         if sid not in allowed or sid in existing:
             continue
         order += 1
-        visited = db.scalar(select(Visit.id).where(Visit.visitor_id == user.id, Visit.store_id == sid).order_by(Visit.entered_at.desc()))
+        visited = db.scalar(select(Visit.id).where(Visit.visitor_id == user.id, Visit.store_id == sid, Visit.deleted_at.is_(None)).order_by(Visit.entered_at.desc()))
         v = db.get(Visit, visited) if visited else None
         done = v is not None and local_date(v.entered_at) == d
         db.add(VisitPlan(user_id=user.id, plan_date=d, store_id=sid, source=source, reason=(reasons or {}).get(sid, ""), sort_order=order,
