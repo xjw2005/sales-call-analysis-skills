@@ -8,3 +8,4 @@
   <view wx:if="{{loaded && !total}}" class="faint none">没有匹配的门店</view>
   <view wx:elif="{{rows.length < total}}" class="faint none">上拉加载更多（{{rows.length}} / {{total}}）</view>
 </view>
+<back-top show="{{showTop}}" offset="{{48}}" />

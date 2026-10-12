@@ -1,0 +1,1 @@
+<view wx:if="{{show}}" class="back-top" style="bottom: calc({{offset}}rpx + env(safe-area-inset-bottom))" bindtap="top"><view class="arrow"></view></view>

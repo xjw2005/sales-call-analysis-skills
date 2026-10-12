@@ -1,0 +1,3 @@
+/* 默认位置在悬浮标签栏（高 128rpx、离底 16rpx）的上方，不被盖住；bottom 由 offset 决定 */
+.back-top { position: fixed; right: 32rpx; width: 88rpx; height: 88rpx; border-radius: 50%; background: rgba(255,255,255,0.96); box-shadow: 0 8rpx 32rpx rgba(28,27,75,0.16); display: flex; align-items: center; justify-content: center; z-index: 900; }
+.arrow { width: 22rpx; height: 22rpx; border-left: 5rpx solid #5b55e8; border-top: 5rpx solid #5b55e8; transform: translateY(6rpx) rotate(45deg); }

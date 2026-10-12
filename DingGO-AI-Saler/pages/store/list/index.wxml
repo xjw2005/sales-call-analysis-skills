@@ -35,3 +35,4 @@
     <view class="btn-primary" bindtap="addStore">添加门店</view>
   </view>
 </view>
+<back-top show="{{showTop}}" offset="{{300}}" />

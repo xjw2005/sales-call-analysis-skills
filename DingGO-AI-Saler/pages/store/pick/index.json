@@ -1,1 +1,6 @@
-{ "navigationBarTitleText": "选择门店" }
+{
+  "navigationBarTitleText": "选择门店",
+  "usingComponents": {
+    "back-top": "/components/back-top/index"
+  }
+}

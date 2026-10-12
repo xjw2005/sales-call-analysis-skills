@@ -1,10 +1,14 @@
 const { listStores } = require('../../../services/store');
+const trackScroll = require('../../../utils/backtop');
 
 const PAGE = 40;
 
 // 门店选择：可搜索（名称 / 地址 / 平台门店 ID），按最近拜访排序；选中后通过事件通道把门店回传给上一页
 Page({
-  data: { keyword: '', rows: [], total: 0, loaded: false },
+  data: { keyword: '', rows: [], total: 0, loaded: false, showTop: false },
+  onPageScroll(e) {
+    trackScroll(this, e.scrollTop);
+  },
   onLoad() {
     this.channel = this.getOpenerEventChannel();
   },

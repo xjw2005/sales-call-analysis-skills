@@ -291,3 +291,76 @@ test('绑定：码不足 8 位、码错误：给出提示且留在本页，可�
   assert.strictEqual(log.storage.bindToken, 'BT'); // 绑定令牌还在，能继续输入
   assert.deepStrictEqual(log.navigations, []);
 });
+
+// ---------- 自定义组件：用到的都要声明，声明的文件都要存在 ----------
+test('wxml 里用到的自定义组件都在 json 里声明过，声明的组件文件都存在', () => {
+  const BUILTIN = new Set(['scroll-view', 'swiper-item', 'movable-view', 'movable-area', 'cover-view', 'cover-image', 'match-media', 'page-container', 'share-element', 'page-meta', 'navigation-bar', 'open-data', 'web-view', 'grid-view', 'list-view', 'sticky-header', 'sticky-section']);
+  const appComps = (JSON.parse(fs.readFileSync(path.join(ROOT, 'app.json'), 'utf8')).usingComponents) || {};
+  const problems = [];
+  walk(ROOT).forEach((wxml) => {
+    const jsonFile = wxml.replace(/\.wxml$/, '.json');
+    const declared = fs.existsSync(jsonFile) ? (JSON.parse(fs.readFileSync(jsonFile, 'utf8')).usingComponents || {}) : {};
+    Object.entries({ ...appComps, ...declared }).forEach(([, ref]) => {
+      if (!fs.existsSync(path.join(ROOT, `${ref}.js`)) || !fs.existsSync(path.join(ROOT, `${ref}.wxml`))) problems.push(`${path.relative(ROOT, jsonFile)}: 组件文件不存在 ${ref}`);
+    });
+    const used = new Set([...fs.readFileSync(wxml, 'utf8').matchAll(/<([a-z]+(?:-[a-z]+)+)[\s/>]/g)].map((m) => m[1]));
+    used.forEach((tag) => { if (!BUILTIN.has(tag) && !(tag in declared) && !(tag in appComps)) problems.push(`${path.relative(ROOT, wxml)}: 用了 <${tag}> 但没有在 json 里声明`); });
+  });
+  assert.deepStrictEqual(problems, []);
+});
+
+// ---------- 回到顶部 ----------
+function loadComponent(rel, wx) {
+  let def;
+  global.Component = (d) => { def = d; };
+  global.wx = wx;
+  const file = path.join(ROOT, rel);
+  delete require.cache[require.resolve(file)];
+  require(file);
+  return def;
+}
+
+test('回到顶部：滚过一屏才显示；只在跨过阈值时刷新页面，滚动过程中不会每帧 setData', () => {
+  const { page } = mountPage('pages/visit/list/index.js', { stubs: { 'services/visit.js': { listVisits: async () => [] } } });
+  const sets = [];
+  const orig = page.setData;
+  page.setData = function spy(p, cb) { sets.push(p); return orig.call(this, p, cb); };
+  [0, 50, 300, 600].forEach((y) => page.onPageScroll({ scrollTop: y }));
+  assert.strictEqual(sets.length, 0); // 没到一屏：不动
+  page.onPageScroll({ scrollTop: 601 });
+  assert.deepStrictEqual(sets, [{ showTop: true }]);
+  [700, 900, 2000, 5000].forEach((y) => page.onPageScroll({ scrollTop: y }));
+  assert.strictEqual(sets.length, 1); // 一直在往下滚：不重复刷新
+  page.onPageScroll({ scrollTop: 100 }); // 往回滚到顶部附近
+  assert.deepStrictEqual(sets[1], { showTop: false });
+  assert.strictEqual(page.data.showTop, false);
+});
+
+test('回到顶部：长列表页（拜访、门店、选择门店）都接上了滚动监听和按钮', () => {
+  [['pages/visit/list', null], ['pages/store/list', 300], ['pages/store/pick', 48]].forEach(([dir, offset]) => {
+    const js = fs.readFileSync(path.join(ROOT, dir, 'index.js'), 'utf8');
+    const wxml = fs.readFileSync(path.join(ROOT, dir, 'index.wxml'), 'utf8');
+    assert.ok(js.includes('onPageScroll') && js.includes('showTop'), `${dir} 缺少滚动监听`);
+    assert.ok(wxml.includes('<back-top show="{{showTop}}"'), `${dir} 缺少按钮`);
+    if (offset) assert.ok(wxml.includes(`offset="{{${offset}}}"`), `${dir} 按钮位置`);
+  });
+});
+
+test('回到顶部：点按钮平滑滚回页面顶部', () => {
+  const calls = [];
+  const def = loadComponent('components/back-top/index.js', { pageScrollTo: (o) => calls.push(o) });
+  assert.strictEqual(def.properties.offset.value, 176); // 默认在标签栏上方
+  def.methods.top();
+  assert.deepStrictEqual(calls, [{ scrollTop: 0, duration: 300 }]);
+});
+
+test('底部标签栏：点已选中的标签回到顶部，点别的标签才切换页面', () => {
+  const calls = { scroll: [], tab: [] };
+  const def = loadComponent('custom-tab-bar/index.js', { pageScrollTo: (o) => calls.scroll.push(o), switchTab: (o) => calls.tab.push(o.url) });
+  const self = { data: { ...def.data, selected: 2 } };
+  def.methods.switchTab.call(self, { currentTarget: { dataset: { index: 2 } } });
+  assert.deepStrictEqual([calls.scroll.length, calls.tab.length], [1, 0]);
+  def.methods.switchTab.call(self, { currentTarget: { dataset: { index: 0 } } });
+  assert.deepStrictEqual(calls.tab, ['/pages/home/index']);
+  assert.strictEqual(calls.scroll.length, 1);
+});

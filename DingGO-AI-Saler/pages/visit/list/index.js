@@ -1,5 +1,6 @@
 const setTab = require('../../../utils/tab');
 const { listVisits } = require('../../../services/visit');
+const trackScroll = require('../../../utils/backtop');
 
 const FILTERS = [
   { text: '全部', match: () => true },
@@ -10,7 +11,10 @@ const FILTERS = [
 ];
 
 Page({
-  data: { filters: FILTERS.map((f) => f.text), active: 0, all: [], shown: [] },
+  data: { filters: FILTERS.map((f) => f.text), active: 0, all: [], shown: [], showTop: false },
+  onPageScroll(e) {
+    trackScroll(this, e.scrollTop);
+  },
   onShow() {
     setTab(this, 2);
     this.load();

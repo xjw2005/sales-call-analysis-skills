@@ -8,3 +8,4 @@
   </empty-state>
   <view class="tab-safe"></view>
 </view>
+<back-top show="{{showTop}}" />

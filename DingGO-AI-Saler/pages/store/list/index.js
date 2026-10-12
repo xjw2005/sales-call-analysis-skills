@@ -2,6 +2,7 @@ const setTab = require('../../../utils/tab');
 const fmt = require('../../../utils/format');
 const { COOP_TONE } = require('../../../utils/constants');
 const { listStores, peekStores } = require('../../../services/store');
+const trackScroll = require('../../../utils/backtop');
 
 const DAY = 24 * 3600 * 1000;
 const PAGE = 40;
@@ -18,7 +19,10 @@ Page({
   data: {
     stores: [], shown: [], rows: [], keyword: '', loaded: false,
     coopOpts: COOP, visitOpts: VISIT, owners: [],
-    coop: '全部', visit: 'all', owner: '全部', filterOpen: false, activeCount: 0, counts: {},
+    coop: '全部', visit: 'all', owner: '全部', filterOpen: false, activeCount: 0, counts: {}, showTop: false,
+  },
+  onPageScroll(e) {
+    trackScroll(this, e.scrollTop);
   },
   onShow() {
     setTab(this, 1);

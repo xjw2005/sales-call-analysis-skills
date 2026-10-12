@@ -12,7 +12,9 @@ Component({
   methods: {
     switchTab(e) {
       const { index } = e.currentTarget.dataset;
-      wx.switchTab({ url: this.data.list[index].pagePath });
+      // 点的是当前已选中的标签：和微信的习惯一样，回到页面顶部
+      if (Number(index) === this.data.selected) return wx.pageScrollTo({ scrollTop: 0, duration: 300 });
+      return wx.switchTab({ url: this.data.list[index].pagePath });
     },
   },
 });
