@@ -187,7 +187,7 @@ SQL
 | `search_stores` | 按省市区、关键词、合作状态、拜访情况（从未去/30 天没去/近期去过）、排序（综合优先级/销量偏低/最久没去/最近去过）找门店 |
 | `add_to_plan` / `remove_from_plan` | 对话里把门店加入、移出今日计划（可说「前三家」「第二家」「XX 不去了」） |
 
-- **对话保存在服务端**（`chat_sessions` / `chat_messages`）：前端只传会话号 `sessionId`（不传就新开一段），历史、「刚才给销售看的门店」都由服务端按会话取，不信任前端回传；会话只有本人能读、能写、能删（别人的会话号一律 404）。接口：`GET /chat/sessions`、`GET /chat/sessions/{id}`、`DELETE /chat/sessions/{id}`。每次还会带上今天的计划；提到店名就带上那家店的资料。
+- **对话保存在服务端**（`chat_sessions` / `chat_messages`）：前端只传会话号 `sessionId`（不传就新开一段），历史、「刚才给销售看的门店」都由服务端按会话取，不信任前端回传；会话只有本人能读、能写、能删（别人的会话号一律 404）。接口：`GET /chat/sessions`、`GET /chat/sessions/{id}`、`DELETE /chat/sessions/{id}`（删一段）、`DELETE /chat/sessions`（清空我的全部对话）。删除只删对话和消息；每次提问的耗时 / 用量 / 「有用没用」反馈记录（`chat_logs`）保留，用来优化提示词。每次还会带上今天的计划；提到店名就带上那家店的资料。
 - **限流排队**（单进程内存实现，**服务不要多开 worker**）：每人同一时间只能有一个提问在进行；每人每分钟 `CHAT_PER_MINUTE`（默认 10）、每天 `DAILY_CHAT_LIMIT`（默认 200，按 `chat_logs` 统计，重启不清零）；全局同时向大模型提问的人数 `CHAT_MAX_CONCURRENT`（默认 6），超出的排队（流式时提示「你排在第 N 位」），最多等 `CHAT_QUEUE_WAIT_SECONDS`（默认 40 秒），排队人数超过 `CHAT_MAX_QUEUE`（默认 20）直接提示稍后再试。大模型返回 429（被限速）时提示「AI 现在请求比较多」。
 - **流式**：事件 `status`（正在查门店…）→ `delta`（回答文字的一小段）→ `final`（完整结果，含候选门店 `cands`、更新后的计划 `plan`、`logId`）；出错是 `error` 事件。模型输出的是 JSON，服务端边收边把 `reply` 字段的文字取出来推送。
 - **记录与反馈**：每次提问写一条 `chat_logs`（耗时、首字耗时、模型调用轮数、token、用到的工具、出错信息）；销售点「有用/没用」调用 `POST /chat/feedback`。优化提示词、估算成本都看这张表，例如：

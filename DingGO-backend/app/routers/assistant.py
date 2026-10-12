@@ -136,6 +136,17 @@ def chat_sessions(db: Session = Depends(get_db), user: User = Depends(current_us
     return [{"id": r.id, "title": r.title, "updatedAt": to_ms(r.updated_at)} for r in rows]
 
 
+@router.delete("/chat/sessions")
+def clear_chat_sessions(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """清空我的全部对话（只删自己的）。返回删除了几段"""
+    ids = list(db.scalars(select(ChatSession.id).where(ChatSession.user_id == user.id)))
+    if ids:
+        db.execute(delete(ChatMessage).where(ChatMessage.session_id.in_(ids)))
+        db.execute(delete(ChatSession).where(ChatSession.id.in_(ids)))
+        db.commit()
+    return {"deleted": len(ids)}
+
+
 @router.get("/chat/sessions/{session_id}")
 def chat_session(session_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     try:

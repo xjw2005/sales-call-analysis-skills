@@ -273,10 +273,16 @@
       </view>
       <text class="faint">›</text>
     </view>
-    <view class="drawer-title">对话记录</view>
-    <view wx:for="{{histories}}" wx:key="id" class="drawer-chat row between" data-id="{{item.id}}" bindtap="openHistory">
-      <text class="dc-title">💬 {{item.title}}</text>
-      <text class="faint">{{item.time}}</text>
+    <view class="drawer-title row between">
+      <text>对话记录</text>
+      <text wx:if="{{histories.length}}" class="dc-clear" bindtap="clearHistories">清空</text>
+    </view>
+    <view wx:for="{{histories}}" wx:key="id" class="drawer-chat row {{item.current ? 'current' : ''}}" data-id="{{item.id}}" bindtap="openHistory">
+      <view class="dc-main">
+        <view class="dc-title">💬 {{item.title}}</view>
+        <view class="faint dc-time">{{item.time}}{{item.current ? ' · 当前' : ''}}</view>
+      </view>
+      <view class="dc-del" data-id="{{item.id}}" data-title="{{item.title}}" catchtap="deleteHistory">删除</view>
     </view>
     <view wx:if="{{!histories.length}}" class="faint">还没有对话</view>
     <view style="height:60rpx"></view>

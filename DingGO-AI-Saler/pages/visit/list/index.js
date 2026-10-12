@@ -16,12 +16,16 @@ Page({
     this.load();
   },
   onPullDownRefresh() {
-    this.load().then(() => wx.stopPullDownRefresh());
+    this.load().finally(() => wx.stopPullDownRefresh()); // 加载失败也要把下拉的转圈收起来
   },
   async load() {
-    const all = await listVisits();
-    this.setData({ all });
-    this.apply();
+    try {
+      const all = await listVisits();
+      this.setData({ all });
+      this.apply();
+    } catch (err) {
+      wx.showToast({ title: err.message, icon: 'none' });
+    }
   },
   pick(e) {
     this.setData({ active: Number(e.currentTarget.dataset.i) });

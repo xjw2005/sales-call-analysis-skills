@@ -121,6 +121,9 @@ Page({
         this.setData({ seconds, timeText: fmt.duration(seconds) });
       }, 1000);
       wx.enableAlertBeforeUnload({ message: '正在录音，离开将结束本次录音，确定离开吗？' });
+    } else if (state === 'stopped' && this.data.segments.length) {
+      // 录完还没提交就离开会丢掉这次录音：继续提醒，直到提交成功或重录
+      wx.enableAlertBeforeUnload({ message: '录音还没有提交，离开将丢失这次录音，确定离开吗？' });
     } else if (state === 'stopped' || state === 'idle') {
       wx.disableAlertBeforeUnload();
     }
@@ -181,7 +184,13 @@ Page({
     wx.showModal({
       title: '重新录音',
       content: '当前录音将被丢弃，确定吗？',
-      success: (r) => r.confirm && this.setData({ state: 'idle', seconds: 0, timeText: '00:00', segments: [], importName: '' }),
+      success: (r) => {
+        if (!r.confirm) return;
+        this.startedAt = 0; // 进店时间重新算：以重录后第一次开始录音为准
+        this.submitted = null; // 旧的上传进度作废
+        wx.disableAlertBeforeUnload();
+        this.setData({ state: 'idle', seconds: 0, timeText: '00:00', segments: [], importName: '' });
+      },
     });
   },
 
@@ -250,17 +259,27 @@ Page({
     this.setData({ submitting: true, step: 1 });
     wx.showLoading({ title: '上传中', mask: true });
     try {
-      const visit = await createVisit({
-        storeId: stores[storeIndex].id,
-        stage: STAGES[stageIndex],
-        cooperated: isFirst ? cooperated : null,
-        note,
-        durationSec: seconds,
-        segments,
-        enteredAt: this.startedAt,
-        storeCondition: conditionIndex > 0 ? conditions[conditionIndex] : undefined,
-      });
-      await uploadSegments(segments, visit.upload, (done, total) => wx.showLoading({ title: `上传 ${done}/${total}`, mask: true }));
+      // 上传中途失败后重试：沿用已经创建好的拜访、跳过已完成的步骤，不能再建一条重复的拜访
+      const key = `${stores[storeIndex].id}|${STAGES[stageIndex]}|${segments.join(',')}`;
+      if (!this.submitted || this.submitted.key !== key) this.submitted = { key, visit: null, uploaded: false };
+      const sub = this.submitted;
+      if (!sub.visit) {
+        sub.visit = await createVisit({
+          storeId: stores[storeIndex].id,
+          stage: STAGES[stageIndex],
+          cooperated: isFirst ? cooperated : null,
+          note,
+          durationSec: seconds,
+          segments,
+          enteredAt: this.startedAt,
+          storeCondition: conditionIndex > 0 ? conditions[conditionIndex] : undefined,
+        });
+      }
+      const visit = sub.visit;
+      if (!sub.uploaded) {
+        await uploadSegments(segments, visit.upload, (done, total) => wx.showLoading({ title: `上传 ${done}/${total}`, mask: true }));
+        sub.uploaded = true;
+      }
       await completeUpload(visit.id, seconds);
       wx.hideLoading();
       wx.disableAlertBeforeUnload();

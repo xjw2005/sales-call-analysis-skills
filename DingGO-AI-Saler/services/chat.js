@@ -73,6 +73,13 @@ async function listSessions() {
 async function getSession(id) {
   return request({ url: `/chat/sessions/${id}` });
 }
+// 删除一段对话 / 清空全部对话（只会删自己的）
+async function deleteSession(id) {
+  return request({ url: `/chat/sessions/${id}`, method: 'DELETE' });
+}
+async function clearSessions() {
+  return request({ url: '/chat/sessions', method: 'DELETE' });
+}
 
 // 对一次回答点「有用 / 没用」
 async function sendFeedback(logId, rating, note = '') {
@@ -119,4 +126,4 @@ function mockAnswer(q, store) {
   };
 }
 
-module.exports = { ask, askStream, sendFeedback, listSessions, getSession };
+module.exports = { ask, askStream, sendFeedback, listSessions, getSession, deleteSession, clearSessions };

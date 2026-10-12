@@ -115,8 +115,13 @@
 .drawer-store { padding: 16rpx 0; font-size: 30rpx; gap: 16rpx; }
 .pill-avatar.small { width: 56rpx; height: 56rpx; line-height: 56rpx; background: #eeedfd; color: #5b55e8; margin-right: 0; }
 .cur { margin-left: auto; }
-.drawer-chat { padding: 18rpx 0; font-size: 28rpx; }
-.dc-title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; margin-right: 16rpx; }
+.drawer-chat { padding: 18rpx 0; font-size: 28rpx; gap: 16rpx; border-bottom: 2rpx solid #f1f2f8; }
+.drawer-chat.current .dc-title { color: #5b55e8; font-weight: 600; }
+.dc-main { flex: 1; min-width: 0; }
+.dc-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dc-time { font-size: 22rpx; margin-top: 4rpx; }
+.dc-del { flex-shrink: 0; color: #e5484d; font-size: 24rpx; padding: 12rpx 16rpx; }
+.dc-clear { font-size: 26rpx; font-weight: 400; color: #8a8fb0; padding: 8rpx 0 8rpx 16rpx; }
 
 /* 今日计划 / 候选门店 */
 .plan-panel { margin-top: 16rpx; }

@@ -25,7 +25,14 @@ Page({
     this.load();
   },
   async load() {
-    const stores = (await listStores()).map((s) => ({
+    let list;
+    try {
+      list = await listStores();
+    } catch (err) {
+      this.setData({ loaded: true });
+      return wx.showToast({ title: err.message, icon: 'none' });
+    }
+    const stores = list.map((s) => ({
       ...s,
       coopTone: COOP_TONE[s.cooperationStatus] || 'muted',
       lastText: s.lastVisitAt ? `最近拜访 ${fmt.date(s.lastVisitAt)}` : '尚未拜访',
@@ -33,7 +40,7 @@ Page({
     const names = [...new Set(stores.map((s) => s.primarySalesName).filter(Boolean))];
     const owners = names.length > 1 ? ['全部', ...names] : [];
     this.setData({ stores, owners, loaded: true });
-    this.filter();
+    return this.filter();
   },
   onSearch(e) {
     this.setData({ keyword: e.detail.value });

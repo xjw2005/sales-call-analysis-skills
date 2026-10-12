@@ -1,10 +1,10 @@
 <view class="page gradient-bg">
   <view class="container">
     <view class="user row">
-      <view class="avatar">熊</view>
+      <view class="avatar">{{initial}}</view>
       <view>
         <view class="name">{{userName}}</view>
-        <view class="faint">销售 · {{useMock ? '演示数据模式' : '正式数据'}}</view>
+        <view class="faint">{{roleText}} · {{useMock ? '演示数据模式' : '正式数据'}}</view>
       </view>
     </view>
 

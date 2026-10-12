@@ -9,21 +9,31 @@ Page({
     this.load();
   },
   async load() {
-    const todos = (await listTodos()).map((t) => {
+    let list;
+    try {
+      list = await listTodos();
+    } catch (err) {
+      return wx.showToast({ title: err.message, icon: 'none' });
+    }
+    const todos = list.map((t) => {
       const hasTarget = t.targetQty !== null && t.targetQty !== undefined;
       return { ...t, hasTarget, pct: hasTarget && t.targetQty ? Math.min(100, Math.round(((t.achievedQty || 0) / t.targetQty) * 100)) : 0 };
     });
     this.todos = todos;
-    this.setData({ open: todos.filter((t) => !t.done), done: todos.filter((t) => t.done) });
+    return this.setData({ open: todos.filter((t) => !t.done), done: todos.filter((t) => t.done) });
   },
   switchTab(e) {
     this.setData({ tab: Number(e.currentTarget.dataset.i) });
   },
   async toggle(e) {
     const { id, done } = e.currentTarget.dataset;
-    await setTodoDone(id, !done);
+    try {
+      await setTodoDone(id, !done);
+    } catch (err) {
+      return wx.showToast({ title: err.message, icon: 'none' });
+    }
     if (!done) wx.showToast({ title: '已完成', icon: 'success' });
-    this.load();
+    return this.load();
   },
   copy(e) {
     const todo = this.todos.find((t) => t.id === e.currentTarget.dataset.id);

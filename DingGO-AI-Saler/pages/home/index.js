@@ -6,7 +6,7 @@ const storage = require('../../utils/storage');
 const { listStores } = require('../../services/store');
 const { listTodos, setTodoDone } = require('../../services/todo');
 const { getTodayPanel, markReviewSeen } = require('../../services/assistant');
-const { askStream, sendFeedback, listSessions, getSession } = require('../../services/chat');
+const { askStream, sendFeedback, listSessions, getSession, deleteSession, clearSessions } = require('../../services/chat');
 const plans = require('../../services/plan');
 const memoryApi = require('../../services/memory');
 const practice = require('../../services/practice');
@@ -24,6 +24,7 @@ const PLACEHOLDERS = [
 
 let seq = 0;
 const mid = () => `m${Date.now()}${(seq += 1)}`;
+const newChatId = () => `c${Date.now()}_${(seq += 1)}`; // 带序号：同一毫秒新建两段对话也不会撞号
 
 Page({
   data: {
@@ -64,12 +65,18 @@ Page({
       day: now.getDate(),
       placeholder: ph,
       defaultPlaceholder: ph,
-      chatId: `c${Date.now()}`,
+      chatId: newChatId(),
     });
+    this.epoch = 0; // 每次换对话 / 新建对话加一：还在路上的旧请求回来后看到不一致就丢弃，不会串进新对话
+    this.openSeq = 0; // 连点两条历史对话时，以最后点的为准
   },
 
   onShow() {
     setTab(this, 0);
+    if (app.globalData.chatsCleared) { // 在「我的」页清空了对话记录：当前打开的对话已不存在
+      app.globalData.chatsCleared = false;
+      this.newChat();
+    }
     this.loadHeader();
     this.greet();
     // 从简报 / 异议页点「陪练」跳回首页时，直接开始对应场景
@@ -86,19 +93,31 @@ Page({
   },
 
   async loadHeader() {
-    if (!config.useMock) await refreshUser();
-    const stores = await listStores();
-    const currentStore = stores.find((s) => s.id === app.globalData.currentStoreId) || stores[0] || null;
-    const panel = await getTodayPanel(currentStore && currentStore.id);
-    this.setData({ stores, currentStore, todayHint: panel.hint, todayCount: panel.count });
+    try {
+      if (!config.useMock) await refreshUser();
+      const stores = await listStores();
+      const currentStore = stores.find((s) => s.id === app.globalData.currentStoreId) || stores[0] || null;
+      const panel = await getTodayPanel(currentStore && currentStore.id);
+      this.setData({ stores, currentStore, todayHint: panel.hint, todayCount: panel.count });
+    } catch (err) {
+      // 顶部的门店和今日提醒取不到（网络差）不影响聊天，下次回到本页再取
+    }
   },
 
   // ---- 消息工具 ----
   push(...items) {
-    const messages = [...this.data.messages, ...items.map((m) => ({ id: mid(), ...m }))];
+    const added = items.map((m) => ({ id: mid(), ...m }));
+    const messages = [...this.data.messages, ...added];
     // 先清空再设回底部：两次设置放在同一帧会被合并，滚动不触发；等这次渲染完再滚
     this.setData({ messages, scrollTo: '' }, () => this.setData({ scrollTo: 'bottom' }));
     this.saveChat(messages);
+    return added.map((m) => m.id);
+  },
+  // 换对话 / 新建对话时的统一收尾：作废还在路上的请求，恢复输入状态
+  resetConversation(patch) {
+    this.epoch += 1;
+    this.openSeq += 1;
+    this.setData({ thinking: false, asking: false, practice: null, placeholder: this.data.defaultPlaceholder, input: '', scrollTo: '', ...patch });
   },
   // 替换某条消息（用于刷新今日待办卡片）
   replace(id, patch) {
@@ -156,10 +175,12 @@ Page({
   async tapOption(e) {
     const { kind, district, label } = e.currentTarget.dataset;
     if (this.data.thinking) return;
+    const epoch = this.epoch;
     this.push({ type: 'user', text: label });
     this.setData({ thinking: true });
     try {
       const res = await plans.suggest({ kind, district });
+      if (epoch !== this.epoch) return;
       this.setData({ thinking: false });
       if (!res.items.length) {
         this.push({ type: 'ai', text: kind === 'commitments' ? '最近没有到期的约定。' : '没有找到合适的门店，可以换一个区，或直接告诉我想去哪家。', suggestions: [] });
@@ -167,6 +188,7 @@ Page({
       }
       this.push({ type: 'cands', cands: { title: res.title, kind, items: res.items.map((it) => ({ ...it, checked: !!it.checked })), done: false } });
     } catch (err) {
+      if (epoch !== this.epoch) return;
       this.setData({ thinking: false });
       this.push({ type: 'ai', text: `出错了：${err.message}`, suggestions: [] });
     }
@@ -209,18 +231,26 @@ Page({
     if (action === 'remove') {
       const { confirm } = await new Promise((resolve) => wx.showModal({ title: '移出今日计划', content: '不去这家店了吗？', success: resolve }));
       if (!confirm) return undefined;
-      await plans.removePlan(id);
-      const fresh = await plans.todayPlan();
-      this.replace(plan, { plan: fresh });
-      this.loadHeader();
+      try {
+        await plans.removePlan(id);
+        const fresh = await plans.todayPlan();
+        this.replace(plan, { plan: fresh });
+        this.loadHeader();
+      } catch (err) {
+        wx.showToast({ title: err.message, icon: 'none' });
+      }
     }
     return undefined;
   },
 
   // ---- 选项一：今日待办 ----
   async openToday() {
-    const panel = await getTodayPanel(this.storeId());
-    this.push({ type: 'user', text: '今日待办' }, { type: 'todo', panel });
+    try {
+      const panel = await getTodayPanel(this.storeId());
+      this.push({ type: 'user', text: '今日待办' }, { type: 'todo', panel });
+    } catch (err) {
+      wx.showToast({ title: err.message, icon: 'none' });
+    }
   },
   async refreshToday(msgId) {
     const panel = await getTodayPanel(this.storeId());
@@ -228,6 +258,14 @@ Page({
     this.loadHeader();
   },
   async onRowAction(e) {
+    try {
+      return await this.runRowAction(e);
+    } catch (err) {
+      wx.showToast({ title: err.message, icon: 'none' });
+      return undefined;
+    }
+  },
+  async runRowAction(e) {
     const { action, id, msg } = e.currentTarget.dataset;
     if (action === 'todoDone') {
       await setTodoDone(id, true);
@@ -236,6 +274,7 @@ Page({
     }
     if (action === 'copyMsg') {
       const todo = (await listTodos()).find((t) => t.id === id);
+      if (!todo) throw new Error('这条待办已不存在');
       return wx.setClipboardData({
         data: wechatMessage(todo, app.globalData.userName),
         success: () => wx.showToast({ title: '话术已复制，去微信粘贴', icon: 'none' }),
@@ -263,46 +302,55 @@ Page({
     this.push({ type: 'user', text: 'AI 销售陪练' }, { type: 'practice-intro', scenarios });
   },
   pickScenario(e) {
+    if (this.data.thinking) return; // 连点两次不要开两场
     const { id, title } = e.currentTarget.dataset;
     this.push({ type: 'user', text: `练「${title}」` });
     this.startScenario(id);
   },
   async startScenario(scenarioId) {
+    if (this.data.thinking) return wx.showToast({ title: '上一条还在回复，稍等一下', icon: 'none' });
     if (this.data.practice) this.exitPractice();
+    const epoch = this.epoch;
     let res;
     this.setData({ thinking: true });
     try {
       res = await practice.start(scenarioId);
     } catch (err) {
-      this.setData({ thinking: false });
+      if (epoch === this.epoch) this.setData({ thinking: false });
       return wx.showToast({ title: err.message, icon: 'none' });
     }
+    if (epoch !== this.epoch) return undefined; // 等开场的时候换了对话：丢弃
     this.setData({ thinking: false });
     this.setData({
       practice: { sessionId: res.sessionId, scenarioId, title: res.title, round: 1, total: res.totalRounds, demo: practice.isDemo() },
       placeholder: '你会怎么回答老板？',
     });
     this.push({ type: 'customer', text: res.reply });
+    return undefined;
   },
   async practiceTurn(text) {
     const p = this.data.practice;
     // 上一次点评没生成成功：再发一句只是重新点评，不再当作新回答
     if (p.pendingFinish) return this.finishPractice();
-    this.push({ type: 'user', text });
+    const epoch = this.epoch;
+    const [userMsgId] = this.push({ type: 'user', text });
     this.setData({ thinking: true });
     let res;
     try {
       res = await practice.turn(p.sessionId, text);
     } catch (err) {
-      this.setData({ thinking: false });
+      if (epoch !== this.epoch) return undefined;
+      // 这句回答后端没有记下：把气泡撤掉、文字放回输入框，重发就行，不会出现重复的一句
+      this.setData({ thinking: false, input: text, messages: this.data.messages.filter((m) => m.id !== userMsgId) });
       return wx.showToast({ title: err.message, icon: 'none' });
     }
+    if (epoch !== this.epoch) return undefined;
     if (res.reply) this.push({ type: 'customer', text: res.reply }); // 老板收尾的话也要显示出来
     if (!res.finished) {
       this.setData({ thinking: false, 'practice.round': res.round || p.round + 1 }); // 轮数以后端为准
-      return;
+      return undefined;
     }
-    this.finishPractice();
+    return this.finishPractice();
   },
   // 销售随时可以主动结束，直接看点评（至少要先答一句）
   endPractice() {
@@ -311,13 +359,16 @@ Page({
   },
   async finishPractice() {
     const p = this.data.practice;
+    const epoch = this.epoch;
     this.setData({ thinking: true });
     try {
       const result = await practice.finish(p.sessionId);
+      if (epoch !== this.epoch) return;
       this.setData({ thinking: false });
       this.push({ type: 'result', result: { ...result, scenarioId: p.scenarioId, title: p.title } });
       this.exitPractice();
     } catch (err) {
+      if (epoch !== this.epoch) return;
       this.setData({ thinking: false, 'practice.pendingFinish': true, placeholder: '点评没有生成，发任意一句重试' });
       wx.showToast({ title: err.message, icon: 'none' });
     }
@@ -328,6 +379,7 @@ Page({
     this.push({ type: 'divider', text: '你已退出 AI 陪练' });
   },
   againPractice(e) {
+    if (this.data.thinking) return;
     this.startScenario(e.currentTarget.dataset.id);
   },
 
@@ -354,21 +406,29 @@ Page({
   },
   // 流式问答：先放一个空的回答气泡，收到一点文字就更新一点；结束后补候选门店、计划卡片
   async askAI(question) {
-    this.push({ type: 'ai', text: '', status: '思考中…', streaming: true, suggestions: [] });
-    const id = this.data.messages[this.data.messages.length - 1].id;
+    const epoch = this.epoch;
+    const [id] = this.push({ type: 'ai', text: '', status: '思考中…', streaming: true, suggestions: [] });
     this.setData({ thinking: true, asking: true });
     let text = '';
     let timer = null;
-    const flush = () => { timer = null; this.replace(id, { text, status: '' }); this.setData({ scrollTo: 'bottom' }); };
+    const stale = () => epoch !== this.epoch; // 回答期间换了对话或新建了对话：旧回答不能再动现在的界面
+    const flush = () => { timer = null; if (stale()) return; this.replace(id, { text, status: '' }); this.setData({ scrollTo: 'bottom' }); };
+    const handlers = {
+      onStatus: (st) => { if (!stale() && !text) this.replace(id, { status: st }); },
+      onDelta: (d) => { text += d; if (!timer) timer = setTimeout(flush, 80); },
+    };
     try {
-      const reply = await askStream(
-        { question, storeId: this.storeId(), sessionId: this.data.sessionId || undefined },
-        {
-          onStatus: (st) => { if (!text) this.replace(id, { status: st }); },
-          onDelta: (d) => { text += d; if (!timer) timer = setTimeout(flush, 80); },
-        },
-      );
+      let reply;
+      try {
+        reply = await askStream({ question, storeId: this.storeId(), sessionId: this.data.sessionId || undefined }, handlers);
+      } catch (err) {
+        // 这段对话在别处被删了（如在「我的」里清空、或换了设备）：另开一段继续，不要卡在「对话不存在」
+        if (!/对话不存在/.test(err.message) || !this.data.sessionId || stale()) throw err;
+        this.setData({ sessionId: 0 });
+        reply = await askStream({ question, storeId: this.storeId() }, handlers);
+      }
       if (timer) clearTimeout(timer);
+      if (stale()) return;
       if (reply.sessionId) this.setData({ sessionId: reply.sessionId });
       this.replace(id, { text: reply.text || text, status: '', streaming: false, suggestions: reply.suggestions || [], demo: !!reply.demo, logId: reply.logId || 0 });
       this.setData({ thinking: false, asking: false });
@@ -386,6 +446,7 @@ Page({
       }
     } catch (err) {
       if (timer) clearTimeout(timer);
+      if (stale()) return;
       this.replace(id, { text: text || err.message || '出错了，请稍后再试', status: '', streaming: false });
       this.setData({ thinking: false, asking: false });
     }
@@ -427,8 +488,7 @@ Page({
     return undefined;
   },
   newChat() {
-    if (this.data.practice) this.setData({ practice: null, placeholder: this.data.defaultPlaceholder });
-    this.setData({ chatId: `c${Date.now()}`, sessionId: 0, messages: [], input: '', scrollTo: '' });
+    this.resetConversation({ chatId: newChatId(), sessionId: 0, messages: [] });
     this.greet();
   },
 
@@ -457,16 +517,52 @@ Page({
     if (typeof this.getTabBar === 'function' && this.getTabBar()) this.getTabBar().setData({ hidden: drawerOpen });
   },
   // 对话记录：真实模式从服务端取（只有自己的），演示模式用本机存储
+  isMockChats() {
+    return !!(config.useMock || config.mockAI);
+  },
+  isCurrentChat(id) {
+    return this.isMockChats() ? id === this.data.chatId : Number(id) === this.data.sessionId;
+  },
   async loadHistories() {
-    if (config.useMock || config.mockAI) {
-      return this.setData({ histories: storage.get(HISTORY_KEY, []).map((h) => ({ ...h, time: fmt.date(h.updatedAt) })) });
+    if (this.isMockChats()) {
+      return this.setData({ histories: storage.get(HISTORY_KEY, []).map((h) => ({ ...h, time: fmt.date(h.updatedAt), current: this.isCurrentChat(h.id) })) });
     }
     try {
       const list = await listSessions();
-      return this.setData({ histories: list.map((h) => ({ id: h.id, title: h.title, time: fmt.date(h.updatedAt) })) });
+      return this.setData({ histories: list.map((h) => ({ id: h.id, title: h.title, time: fmt.date(h.updatedAt), current: this.isCurrentChat(h.id) })) });
     } catch (err) {
       return wx.showToast({ title: err.message, icon: 'none' });
     }
+  },
+  confirmModal(options) {
+    return new Promise((resolve) => wx.showModal({ ...options, success: (r) => resolve(!!r.confirm), fail: () => resolve(false) }));
+  },
+  // 删除一段对话：删的是当前打开的那段，就回到一段全新的对话
+  async deleteHistory(e) {
+    const { id, title } = e.currentTarget.dataset;
+    if (!(await this.confirmModal({ title: '删除这段对话', content: `「${title}」删除后无法恢复。`, confirmColor: '#e5484d' }))) return;
+    try {
+      if (this.isMockChats()) storage.set(HISTORY_KEY, storage.get(HISTORY_KEY, []).filter((h) => h.id !== id));
+      else await deleteSession(id);
+    } catch (err) {
+      return wx.showToast({ title: err.message, icon: 'none' });
+    }
+    if (this.isCurrentChat(id)) this.newChat();
+    wx.showToast({ title: '已删除', icon: 'none' });
+    return this.loadHistories();
+  },
+  async clearHistories() {
+    if (!this.data.histories.length) return undefined;
+    if (!(await this.confirmModal({ title: '清空对话记录', content: '所有对话都会删除，无法恢复。', confirmColor: '#e5484d' }))) return undefined;
+    try {
+      if (this.isMockChats()) storage.set(HISTORY_KEY, []);
+      else await clearSessions();
+    } catch (err) {
+      return wx.showToast({ title: err.message, icon: 'none' });
+    }
+    if (this.isMockChats() ? this.data.messages.length : this.data.sessionId) this.newChat();
+    wx.showToast({ title: '已清空', icon: 'none' });
+    return this.loadHistories();
   },
   pickStore(e) {
     this.toggleDrawer();
@@ -475,13 +571,16 @@ Page({
   async openHistory(e) {
     const id = e.currentTarget.dataset.id;
     this.toggleDrawer();
-    if (config.useMock || config.mockAI) {
+    if (this.isCurrentChat(id)) return;
+    const seq = (this.openSeq += 1); // 连点两条，以最后点的为准
+    if (this.isMockChats()) {
       const h = storage.get(HISTORY_KEY, []).find((x) => x.id === id);
-      if (h) this.setData({ chatId: h.id, messages: h.messages.map((m) => (m.streaming ? { ...m, streaming: false, text: m.text || '（这条回答没有完成）' } : m)), practice: null, placeholder: this.data.defaultPlaceholder, scrollTo: 'bottom' });
+      if (h) this.resetConversation({ chatId: h.id, messages: h.messages.map((m) => (m.streaming ? { ...m, streaming: false, text: m.text || '（这条回答没有完成）' } : m)), scrollTo: 'bottom' });
       return;
     }
     try {
       const rows = await getSession(id);
+      if (seq !== this.openSeq) return;
       // 服务端保存的消息还原成页面上的消息：提问 / 回答 / 候选门店卡片 / 今日计划卡片
       const messages = rows.map((m) => {
         if (m.role === 'user') return { id: mid(), type: 'user', text: m.text };
@@ -489,9 +588,11 @@ Page({
         if (m.role === 'cands') return { id: mid(), type: 'cands', cands: { ...m.payload, items: (m.payload.items || []).map((it) => ({ ...it, checked: false })), done: true } };
         return { id: mid(), type: 'plan', plan: (m.payload && m.payload.plan) || [] };
       });
-      this.setData({ chatId: `s${id}`, sessionId: Number(id), messages, practice: null, placeholder: this.data.defaultPlaceholder, scrollTo: 'bottom' });
+      this.resetConversation({ chatId: `s${id}`, sessionId: Number(id), messages, scrollTo: 'bottom' });
     } catch (err) {
-      wx.showToast({ title: err.message, icon: 'none' });
+      if (seq !== this.openSeq) return;
+      wx.showToast({ title: err.message, icon: 'none' }); // 比如这段对话已在别处删除：刷新列表，别让它还留在那里
+      this.loadHistories();
     }
   },
   noop() {},

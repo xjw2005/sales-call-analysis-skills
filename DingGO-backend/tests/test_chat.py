@@ -361,3 +361,21 @@ def test_legacy_store_context_includes_imported_analysis_and_notes(client, auth,
     for want in ("历史分析原文", "本次聊了招人和陈列", "想要陈列支持", "周五前送陈列物料", "夫妻店", "老板说想要陈列支持", "店铺面积80㎡"):
         assert want in ctx, want
     assert "没有结构化结果" not in ctx
+
+
+def test_clear_all_sessions_only_touches_my_own(client, auth, monkeypatch):
+    stub(monkeypatch, {"action": "answer", "reply": "好的"})
+    from .conftest import login
+    bob = login(client, "bob", "小李")
+    for q in ("第一段", "第二段"):
+        client.post("/chat", json={"question": q}, headers=auth)  # 不带 sessionId：每次新开一段
+    client.post("/chat", json={"question": "小李的"}, headers=bob)
+    assert len(client.get("/chat/sessions", headers=auth).json()) == 2
+    assert client.delete("/chat/sessions", headers=auth).json() == {"deleted": 2}
+    assert client.get("/chat/sessions", headers=auth).json() == []
+    assert len(client.get("/chat/sessions", headers=bob).json()) == 1  # 别人的不受影响
+    assert client.delete("/chat/sessions", headers=auth).json() == {"deleted": 0}  # 已经空了，也不报错
+    from app.db import SessionLocal
+    from app.models import ChatMessage
+    with SessionLocal() as db:
+        assert db.query(ChatMessage).count() > 0  # 小李的消息还在，我的消息已删光

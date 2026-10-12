@@ -43,7 +43,12 @@ Page({
       content: this.data.store.correction || '',
       success: async (res) => {
         if (!res.confirm || !res.content.trim()) return;
-        await submitCorrection(this.data.id, res.content.trim());
+        try {
+          await submitCorrection(this.data.id, res.content.trim());
+        } catch (err) {
+          wx.showToast({ title: err.message, icon: 'none' });
+          return;
+        }
         wx.showToast({ title: '已提交，下次分析生效', icon: 'none' });
         this.load();
       },
