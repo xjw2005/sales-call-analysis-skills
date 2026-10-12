@@ -364,3 +364,112 @@ test('底部标签栏：点已选中的标签回到顶部，点别的标签才�
   assert.deepStrictEqual(calls.tab, ['/pages/home/index']);
   assert.strictEqual(calls.scroll.length, 1);
 });
+
+// ---------- 录音管理器：全局只有一个，监听只注册一次 ----------
+function fakeRecorderEnv() {
+  const handlers = {};
+  const rm = { starts: [], stops: 0 };
+  ['onStart', 'onResume', 'onPause', 'onInterruptionBegin', 'onInterruptionEnd', 'onStop', 'onError'].forEach((n) => { rm[n] = (fn) => { (handlers[n] = handlers[n] || []).push(fn); }; });
+  rm.start = (o) => rm.starts.push(o);
+  rm.stop = () => { rm.stops += 1; };
+  rm.pause = () => {};
+  rm.resume = () => { rm.resumed = (rm.resumed || 0) + 1; };
+  rm.emit = (name, ...args) => (handlers[name] || []).forEach((f) => f(...args));
+  rm.count = (name) => (handlers[name] || []).length;
+  const flags = {};
+  const env = mountPage('pages/record/index.js', {
+    config: { useMock: false },
+    stubs: {
+      'services/store.js': { listStores: async () => [{ id: 's1', name: '甲店' }] },
+      'services/visit.js': { createVisit: async () => ({ id: 'v1', upload: {} }), completeUpload: async () => {} },
+      'services/upload.js': { uploadSegments: async () => ['k'] },
+    },
+    onWx: (wx) => {
+      wx.getRecorderManager = () => rm;
+      wx.authorize = ({ success }) => success();
+      wx.openSetting = () => { flags.settingOpened = true; };
+    },
+  });
+  const another = () => ({ ...env.page, data: JSON.parse(JSON.stringify(env.page.data)) }); // 再打开一次录音页
+  return { ...env, rm, flags, another };
+}
+
+test('录音：多次进出录音页，录音管理器的监听始终只有一份', () => {
+  const { page, rm, another } = fakeRecorderEnv();
+  page.onLoad({ storeId: 's1' });
+  const p2 = another(); p2.onLoad({ storeId: 's1' });
+  const p3 = another(); p3.onLoad({ storeId: 's1' });
+  ['onStart', 'onResume', 'onPause', 'onInterruptionBegin', 'onInterruptionEnd', 'onStop', 'onError'].forEach((n) => assert.strictEqual(rm.count(n), 1, n));
+});
+
+test('录音：事件只交给当前打开的页面，旧页面不会再动（也不会自己续录）', () => {
+  const { page, rm, another } = fakeRecorderEnv();
+  page.onLoad({ storeId: 's1' });
+  const p2 = another(); p2.onLoad({ storeId: 's1' });
+  p2.userStopped = true;
+  rm.emit('onStop', { tempFilePath: 'a.mp3' });
+  assert.strictEqual(p2.data.segments.length, 1);
+  assert.strictEqual(page.data.segments.length, 0);
+  assert.strictEqual(rm.starts.length, 0); // 旧页面没有「时长到了自动续录」
+  p2.onUnload(); // 离开页面后再来事件：不报错，也没有谁处理
+  rm.emit('onStop', { tempFilePath: 'late.mp3' });
+  rm.emit('onError', { errMsg: 'x' });
+  assert.strictEqual(p2.data.segments.length, 1);
+});
+
+test('录音：单段到点自动续录；暂停 / 恢复 / 来电打断后能继续', () => {
+  const { page, rm } = fakeRecorderEnv();
+  page.onLoad({ storeId: 's1' });
+  rm.emit('onStart');
+  assert.strictEqual(page.data.state, 'recording');
+  rm.emit('onStop', { tempFilePath: 'seg1.mp3' }); // 不是用户停的：到时长上限
+  assert.strictEqual(rm.starts.length, 1);
+  assert.strictEqual(page.data.segments.length, 1);
+  rm.emit('onInterruptionBegin');
+  assert.strictEqual(page.data.state, 'paused');
+  rm.emit('onInterruptionEnd');
+  assert.strictEqual(rm.resumed, 1);
+  page.userStopped = true;
+  rm.emit('onStop', { tempFilePath: 'seg2.mp3' });
+  assert.strictEqual(page.data.state, 'stopped');
+  assert.strictEqual(page.data.segments.length, 2);
+});
+
+test('录音出错：完整显示原因（不被截断），页面回到可重试状态，进店时间不记', () => {
+  const { page, rm, log } = fakeRecorderEnv();
+  page.onLoad({ storeId: 's1' });
+  page.setData({ stores: [{ id: 's1', name: '甲店' }], storeIndex: 0 });
+  page.begin();
+  assert.strictEqual(rm.starts.length, 1);
+  assert.strictEqual(page.startedAt, undefined); // 还没真正开始
+  rm.emit('onError', { errMsg: 'operateRecorder:fail internal error' });
+  assert.strictEqual(page.data.state, 'idle');
+  assert.strictEqual(page.startedAt, undefined);
+  const modal = log.modals[log.modals.length - 1];
+  assert.strictEqual(modal.title, '录音出错');
+  assert.ok(modal.content.includes('operateRecorder:fail internal error'));
+  assert.ok(!log.toasts.some((t) => t.includes('录音出错'))); // 不再用会截断的提示条
+});
+
+test('录音出错：没有麦克风权限时，引导去设置；已录了一部分时保留已录的内容', () => {
+  const { page, rm, log, flags } = fakeRecorderEnv();
+  page.onLoad({ storeId: 's1' });
+  rm.emit('onError', { errMsg: 'operateRecorder:fail auth deny' });
+  const modal = log.modals[log.modals.length - 1];
+  assert.strictEqual(modal.confirmText, '去设置');
+  assert.strictEqual(flags.settingOpened, true);
+  page.setData({ segments: ['part.mp3'] });
+  rm.emit('onError', { errMsg: 'operateRecorder:fail interrupted' });
+  assert.strictEqual(page.data.state, 'stopped'); // 已有录音，不丢
+});
+
+test('录音：真正开始（onStart）才记录进店时间，且只记第一次', () => {
+  const { page, rm } = fakeRecorderEnv();
+  page.onLoad({ storeId: 's1' });
+  rm.emit('onStart');
+  const first = page.startedAt;
+  assert.ok(first > 0);
+  page.startedAt = first - 5000;
+  rm.emit('onStart'); // 续录的下一段
+  assert.strictEqual(page.startedAt, first - 5000);
+});

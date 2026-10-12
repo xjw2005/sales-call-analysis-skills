@@ -3,6 +3,10 @@
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+
+// 页面里的计时器（如录音计时、轮询）在测试里不应该阻止进程退出
+const realSetInterval = global.setInterval;
+global.setInterval = (...args) => { const t = realSetInterval(...args); if (t && t.unref) t.unref(); return t; };
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const tick = async (n = 6) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setImmediate(r)); };
 

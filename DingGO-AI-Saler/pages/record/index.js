@@ -7,6 +7,24 @@ const { uploadSegments } = require('../../services/upload');
 const app = getApp();
 const SEGMENT_MS = 10 * 60 * 1000; // 微信单段录音上限 10 分钟，到点自动续录下一段
 
+// 录音管理器是全局唯一的，监听函数一旦注册就删不掉：每次进页面都注册，旧页面的监听会越积越多，
+// 在新页面录音时被重复触发（甚至旧页面自己又发起一次录音，引发 operateRecorder:fail）。
+// 所以全局只注册一次，由它把事件转给「当前打开的这个页面」。
+let activePage = null;
+let wired = false;
+function wireRecorder(rm) {
+  if (wired) return;
+  wired = true;
+  const to = (name) => (...args) => { if (activePage) activePage[name](...args); };
+  rm.onStart(to('onRecStart'));
+  rm.onResume(to('onRecResume'));
+  rm.onPause(to('onRecPause'));
+  rm.onInterruptionBegin(to('onRecPause'));
+  rm.onInterruptionEnd(to('onRecInterruptEnd'));
+  rm.onStop(to('onRecStop'));
+  rm.onError(to('onRecError'));
+}
+
 Page({
   data: {
     importMode: false,
@@ -31,7 +49,9 @@ Page({
   onLoad({ storeId, mode }) {
     this.initialStoreId = storeId;
     this.setData({ importMode: mode === 'import' });
-    this.initRecorder();
+    activePage = this;
+    this.recorder = wx.getRecorderManager();
+    wireRecorder(this.recorder);
     if (mode === 'import') this.chooseFile();
   },
 
@@ -49,6 +69,7 @@ Page({
       this.userStopped = true;
       this.recorder.stop();
     }
+    if (activePage === this) activePage = null;
   },
 
   // ---- 表单 ----
@@ -86,25 +107,35 @@ Page({
   },
 
   // ---- 录音 ----
-  initRecorder() {
-    const rm = wx.getRecorderManager();
-    this.recorder = rm;
-    rm.onStart(() => this.setState('recording'));
-    rm.onResume(() => this.setState('recording'));
-    rm.onPause(() => this.setState('paused'));
-    rm.onInterruptionBegin(() => this.setState('paused'));
-    rm.onInterruptionEnd(() => rm.resume());
-    rm.onStop((res) => {
-      this.keepSegment(res.tempFilePath);
-      if (this.userStopped) {
-        this.setState('stopped');
-      } else {
-        rm.start(this.recordOptions()); // 单段到时长上限，自动续录
-      }
-    });
-    rm.onError((err) => {
-      wx.showToast({ title: `录音出错：${err.errMsg}`, icon: 'none' });
-      this.setState(this.data.segments.length ? 'stopped' : 'idle');
+  // 以下是录音管理器的事件（由 wireRecorder 转发到当前页面）
+  onRecStart() {
+    if (!this.startedAt) this.startedAt = Date.now(); // 进店时间：真正开始录的那一刻，开始失败就不记
+    this.setState('recording');
+  },
+  onRecResume() { this.setState('recording'); },
+  onRecPause() { this.setState('paused'); },
+  onRecInterruptEnd() { this.recorder.resume(); },
+  onRecStop(res) {
+    this.keepSegment(res.tempFilePath);
+    if (this.userStopped) {
+      this.setState('stopped');
+    } else {
+      this.recorder.start(this.recordOptions()); // 单段到时长上限，自动续录
+    }
+  },
+  onRecError(err) {
+    const msg = String((err && err.errMsg) || err || '未知错误');
+    this.setState(this.data.segments.length ? 'stopped' : 'idle');
+    // 提示条（toast）会把长句子截断，看不到原因；用对话框完整显示，并按原因给出能做的事
+    const noPermission = /auth|permission|deny/i.test(msg);
+    wx.showModal({
+      title: '录音出错',
+      content: noPermission
+        ? '没有麦克风权限。请在手机的微信设置里允许使用麦克风，然后重试。'
+        : `录音没能开始或中断了：${msg}\n\n可能是麦克风正被通话、语音或其他应用占用，请先关闭它们再试。仍然不行的话，把这段提示截图发给管理员。`,
+      confirmText: noPermission ? '去设置' : '知道了',
+      showCancel: noPermission,
+      success: (r) => { if (noPermission && r.confirm) wx.openSetting(); },
     });
   },
 
@@ -159,7 +190,6 @@ Page({
           success: (r) => {
             if (!r.confirm) return;
             this.userStopped = false;
-            if (!this.startedAt) this.startedAt = Date.now(); // 进店时间：第一次开始录音的时刻
             this.recorder.start(this.recordOptions());
           },
         });
