@@ -576,3 +576,86 @@ test('录音：真正开始（onStart）才记录进店时间，且只记第一�
   rm.emit('onStart'); // 续录的下一段
   assert.strictEqual(page.startedAt, first - 5000);
 });
+
+// ---------- 待办：生成错了可以删 ----------
+function todoPage({ modals, removePlan, cancelTodo } = {}) {
+  const calls = { removePlan: [], cancel: [], load: 0 };
+  const env = mountPage('pages/todo/index.js', {
+    modals,
+    stubs: {
+      'services/todo.js': {
+        loadTodoCenter: async () => { calls.load += 1; return center(); },
+        setTodoDone: async () => true,
+        cancelTodo: cancelTodo || (async (id) => { calls.cancel.push(id); return true; }),
+      },
+      'services/plan.js': { removePlan: removePlan || (async (id) => { calls.removePlan.push(id); return true; }) },
+    },
+  });
+  return { ...env, calls };
+}
+const ds = (o) => ({ currentTarget: { dataset: o } });
+
+test('待办页：今日计划里的店可以「移出计划」，要先确认，取消不动', async () => {
+  const { page, calls, log } = todoPage({ modals: [{ confirm: false }, { confirm: true }] });
+  await page.removePlan(ds({ id: 'p1', name: '建辉乳业' }));
+  assert.deepStrictEqual(calls.removePlan, []); // 点了取消
+  assert.strictEqual(calls.load, 0);
+  await page.removePlan(ds({ id: 'p1', name: '建辉乳业' }));
+  assert.deepStrictEqual(calls.removePlan, ['p1']);
+  assert.strictEqual(calls.load, 1); // 删完刷新列表
+  assert.ok(log.toasts.includes('已移出今日计划'));
+  assert.ok(log.modals[0].content.includes('建辉乳业') && log.modals[0].confirmColor);
+});
+
+test('待办页：跟进事项可以「删除」，要先确认，提示里说明做完了请点标记完成', async () => {
+  const { page, calls, log } = todoPage({ modals: [{ confirm: false }, { confirm: true }] });
+  await page.removeTodo(ds({ id: 't9', topic: '补齐控价证据' }));
+  assert.deepStrictEqual(calls.cancel, []);
+  await page.removeTodo(ds({ id: 't9', topic: '补齐控价证据' }));
+  assert.deepStrictEqual(calls.cancel, ['t9']);
+  assert.strictEqual(calls.load, 1);
+  assert.ok(log.toasts.includes('已删除'));
+  assert.ok(log.modals[0].content.includes('标记完成'));
+});
+
+test('待办页：删除或移出失败时提示原因，列表不刷新（避免看起来删掉了其实没删）', async () => {
+  const { page, calls, log } = todoPage({ removePlan: async () => { throw new Error('网络异常'); }, cancelTodo: async () => { throw new Error('待办不存在'); } });
+  await page.removePlan(ds({ id: 'p1', name: 'x' }));
+  await page.removeTodo(ds({ id: 't1', topic: 'x' }));
+  assert.ok(log.toasts.includes('网络异常') && log.toasts.includes('待办不存在'));
+  assert.ok(!log.toasts.includes('已删除') && !log.toasts.includes('已移出今日计划'));
+  assert.strictEqual(calls.load, 0);
+});
+
+test('待办页：界面上有「移出计划」和「删除」按钮，并且只在待办里出现', () => {
+  const wxml = fs.readFileSync(path.join(ROOT, 'pages/todo/index.wxml'), 'utf8');
+  assert.ok(wxml.includes('bindtap="removePlan"') && wxml.includes('bindtap="removeTodo"'));
+  const [openPart] = wxml.split('<!-- 已完成');
+  assert.ok(openPart.includes('bindtap="removePlan"') && openPart.includes('bindtap="removeTodo"'));
+});
+
+test('删除待办的请求：PATCH 状态为 cancelled', async () => {
+  const seen = [];
+  mountPage('pages/me/index.js', {
+    config: { useMock: false, transport: 'http', baseUrl: 'http://x' },
+    storage: { token: 'T' },
+    stubs: { 'services/visit.js': { listVisits: async () => [] } },
+    onWx: (wx) => { wx.request = (o) => { seen.push(o); o.success({ statusCode: 200, data: {} }); }; },
+  });
+  const { cancelTodo } = require(path.join(ROOT, 'services/todo.js'));
+  await cancelTodo(7);
+  assert.deepStrictEqual([seen[0].method, seen[0].url, seen[0].data], ['PATCH', 'http://x/todos/7', { status: 'cancelled' }]);
+});
+
+test('演示模式：删除的待办不再出现在列表里（记在本机）', async () => {
+  const { log } = mountPage('pages/me/index.js', { config: { useMock: true, mockAI: true }, stubs: {} });
+  const { listTodos, cancelTodo } = require(path.join(ROOT, 'services/todo.js'));
+  const before = await listTodos();
+  assert.ok(before.length > 0);
+  const victim = before[0].id;
+  await cancelTodo(victim);
+  const after = await listTodos();
+  assert.ok(!after.some((t) => t.id === victim));
+  assert.strictEqual(after.length, before.length - 1);
+  assert.ok(log.storage.todoCancelled.includes(victim));
+});

@@ -68,27 +68,27 @@ def apply_analysis(db: Session, visit: Visit, analysis: dict, transcript: list |
             upsert_profile_section(db, visit.store_id, s["key"], s.get("state", "未确认"), s.get("content", ""),
                                    evidence=s.get("evidence") or None, source_visit_id=visit.id)
 
-    # 待办：本次拜访还没做的 AI 待办重建；已完成的保留
+    # 待办：本次拜访还没做的 AI 待办重建；已完成的保留。
+    # 销售已经「完成」或「删除」的（话题和内容完全一样）不再重新生成：否则重新分析（重试、重新判定）之后，
+    # 删掉的待办会回来、做完的会多出一份新的
     db.execute(delete(Todo).where(Todo.visit_id == visit.id, Todo.source == "ai", Todo.status == "open"))
+    handled = {(t.topic, t.action) for t in db.scalars(select(Todo).where(Todo.visit_id == visit.id, Todo.source == "ai", Todo.status.in_(["done", "cancelled"])))}
     base = local_date(visit.entered_at)
     store = db.get(Store, visit.store_id)
+    assignee = visit.visitor_id or (store.primary_sales_id if store else None)
+
+    def add_todo(topic: str, action: str, **extra) -> None:
+        if (topic, action) not in handled:
+            db.add(Todo(source="ai", visit_id=visit.id, store_id=visit.store_id, assignee_id=assignee, topic=topic, action=action, **extra))
+
     # 录音里已确认的约定（「过两天带空罐来」「老板不在，周五再来」）：销售、客户、双方的都记成待办，到期就会提醒
     for a in (analysis.get("nextAction") or {}).get("confirmedActions", []):
-        db.add(Todo(
-            source="ai", visit_id=visit.id, store_id=visit.store_id,
-            assignee_id=visit.visitor_id or (store.primary_sales_id if store else None),
-            topic=a.get("action", "")[:60], action=a.get("action", ""), owner=a.get("owner", "销售"),
-            timeframe=a.get("timeframe", ""), reason="录音中已确认的约定",
-            due_date=due_or_default(a.get("timeframe", ""), base, None),
-        ))
+        add_todo(a.get("action", "")[:60], a.get("action", ""), owner=a.get("owner", "销售"), timeframe=a.get("timeframe", ""),
+                 reason="录音中已确认的约定", due_date=due_or_default(a.get("timeframe", ""), base, None))
     for a in (analysis.get("nextAction") or {}).get("actions", []):
-        db.add(Todo(
-            source="ai", visit_id=visit.id, store_id=visit.store_id,
-            assignee_id=visit.visitor_id or (store.primary_sales_id if store else None),
-            topic=a.get("topic", "")[:128], action=a.get("action", ""), owner=a.get("owner", "销售"),
-            timeframe=a.get("timeframe", ""), reason=a.get("reason", ""), acceptance=a.get("acceptance", ""),
-            due_date=due_or_default(a.get("timeframe", ""), base, a.get("dueDays")),
-        ))
+        add_todo(a.get("topic", "")[:128], a.get("action", ""), owner=a.get("owner", "销售"), timeframe=a.get("timeframe", ""),
+                 reason=a.get("reason", ""), acceptance=a.get("acceptance", ""),
+                 due_date=due_or_default(a.get("timeframe", ""), base, a.get("dueDays")))
 
     if visit.cooperated == "是" and store:
         store.cooperation_status = "已合作"

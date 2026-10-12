@@ -15,6 +15,7 @@
         </view>
         <view wx:if="{{item.reason || item.district}}" class="action">{{item.reason || item.district}}</view>
         <view class="btns row">
+          <view class="fb fb-danger" data-id="{{item.id}}" data-name="{{item.name}}" bindtap="removePlan">移出计划</view>
           <view class="fb" data-store="{{item.storeId}}" bindtap="openBrief">看简报</view>
           <view class="fb-primary" data-store="{{item.storeId}}" bindtap="recordStore">到店录音</view>
         </view>
@@ -37,6 +38,7 @@
         </view>
         <view wx:if="{{item.acceptance}}" class="faint">验收：{{item.acceptance}}</view>
         <view class="btns row">
+          <view class="fb fb-danger" data-id="{{item.id}}" data-topic="{{item.topic}}" bindtap="removeTodo">删除</view>
           <view class="fb" data-id="{{item.id}}" bindtap="copy">复制微信话术</view>
           <view class="fb-primary" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">标记完成</view>
         </view>

@@ -1,4 +1,5 @@
-const { loadTodoCenter, setTodoDone } = require('../../services/todo');
+const { loadTodoCenter, setTodoDone, cancelTodo } = require('../../services/todo');
+const plans = require('../../services/plan');
 const { wechatMessage } = require('../../utils/playbook');
 const fmt = require('../../utils/format');
 
@@ -70,5 +71,34 @@ Page({
   },
   openVisit(e) {
     wx.navigateTo({ url: `/pages/visit/detail/index?id=${e.currentTarget.dataset.id}` });
+  },
+
+  // ---- 生成错了、不需要做了：可以删除 ----
+  confirmModal(options) {
+    return new Promise((resolve) => wx.showModal({ ...options, confirmColor: '#e5484d', success: (r) => resolve(!!r.confirm), fail: () => resolve(false) }));
+  },
+  // 今日计划里的店：移出计划（不影响门店本身）
+  async removePlan(e) {
+    const { id, name } = e.currentTarget.dataset;
+    if (!(await this.confirmModal({ title: '移出今日计划', content: `不去「${name}」了吗？门店本身不受影响。`, confirmText: '移出' }))) return undefined;
+    try {
+      await plans.removePlan(id);
+    } catch (err) {
+      return wx.showToast({ title: err.message, icon: 'none' });
+    }
+    wx.showToast({ title: '已移出今日计划', icon: 'none' });
+    return this.load();
+  },
+  // 跟进事项：删除后不再出现、不再提醒，重新分析这次拜访也不会再生成同一条
+  async removeTodo(e) {
+    const { id, topic } = e.currentTarget.dataset;
+    if (!(await this.confirmModal({ title: '删除这条待办', content: `「${topic}」删除后不再提醒。是做完了的话，请点「标记完成」。`, confirmText: '删除' }))) return undefined;
+    try {
+      await cancelTodo(id);
+    } catch (err) {
+      return wx.showToast({ title: err.message, icon: 'none' });
+    }
+    wx.showToast({ title: '已删除', icon: 'none' });
+    return this.load();
   },
 });

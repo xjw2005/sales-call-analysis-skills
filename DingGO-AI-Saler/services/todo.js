@@ -8,6 +8,7 @@ const seed = require('../model/seed');
 
 const DAY = 24 * 3600 * 1000;
 const DONE_KEY = 'todoDone';
+const CANCEL_KEY = 'todoCancelled'; // 演示模式：删除的待办记在本机
 
 function endOfDay(ts) {
   const d = new Date(ts);
@@ -30,6 +31,7 @@ async function listTodos() {
   if (!config.useMock) return request({ url: '/todos' });
   const visits = await listVisits();
   const done = storage.get(DONE_KEY, []);
+  const cancelled = storage.get(CANCEL_KEY, []);
   const seen = {};
   const todos = [];
   visits.forEach((v) => {
@@ -55,7 +57,7 @@ async function listTodos() {
     dueAt: goalDue, due: dueText(goalDue), dueDate: fmt.date(goalDue).split(' ')[0], done: done.indexOf('t-goal-s1') >= 0,
     targetQty: 60, achievedQty: 36, gapQty: 24, unit: '罐', progressNote: '月中下单，本月指标已和老板确认。',
   });
-  return delay(todos.sort((a, b) => a.dueAt - b.dueAt));
+  return delay(todos.filter((t) => cancelled.indexOf(t.id) < 0).sort((a, b) => a.dueAt - b.dueAt));
 }
 
 function setTodoDone(id, isDone) {
@@ -63,6 +65,13 @@ function setTodoDone(id, isDone) {
   const done = storage.get(DONE_KEY, []).filter((x) => x !== id);
   if (isDone) done.push(id);
   storage.set(DONE_KEY, done);
+  return delay(true, 100);
+}
+
+// 删除一条待办（生成错了、不需要做了）：后端是「取消」，不再出现在列表里，重新分析也不会再生成同一条
+function cancelTodo(id) {
+  if (!config.useMock) return request({ url: `/todos/${id}`, method: 'PATCH', data: { status: 'cancelled' } });
+  storage.set(CANCEL_KEY, [...storage.get(CANCEL_KEY, []).filter((x) => x !== id), id]);
   return delay(true, 100);
 }
 
@@ -83,4 +92,4 @@ async function loadTodoCenter() {
   };
 }
 
-module.exports = { listTodos, setTodoDone, loadTodoCenter };
+module.exports = { listTodos, setTodoDone, cancelTodo, loadTodoCenter };

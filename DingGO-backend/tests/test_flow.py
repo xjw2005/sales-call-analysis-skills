@@ -306,3 +306,24 @@ def test_checkin_coordinates_are_validated(client, auth):
     assert edge.status_code == 200  # 边界值允许
     none = client.post("/visits", json={"storeId": s["id"], "stage": "日常维护", "durationSec": 60}, headers=auth)
     assert none.status_code == 200 and none.json()["checkin"]["lat"] is None  # 没定位也能正常提交
+
+
+def test_reanalysis_does_not_bring_back_deleted_or_finished_todos(client, auth):
+    """重新分析（重试 / 重新判定）：销售删掉的待办不会回来，做完的不会多出一份；没处理的照常更新，新的行动照常加上"""
+    import copy
+
+    s = make_store(client, auth)
+    v = make_visit(client, auth, s["id"])
+    client.post(f"/admin/visits/{v['id']}/analysis", json={"analysis": ANALYSIS}, headers=ADMIN)
+    first, second = client.get("/todos", headers=auth).json()
+    assert client.patch(f"/todos/{first['id']}", json={"status": "cancelled"}, headers=auth).status_code == 200  # 删除
+    assert client.post(f"/todos/{second['id']}/done", headers=auth).json()["done"] is True  # 完成
+    again = copy.deepcopy(ANALYSIS)
+    again["nextAction"]["actions"].append({"topic": "新增的行动", "action": "周三送样品", "owner": "销售", "timeframe": "3天内", "dueDays": 3, "reason": "", "acceptance": ""})
+    client.post(f"/admin/visits/{v['id']}/analysis", json={"analysis": again}, headers=ADMIN)
+    todos = client.get("/todos", headers=auth).json()
+    topics = [(t["topic"], t["done"]) for t in todos]
+    assert (first["topic"], False) not in topics and topics.count((first["topic"], True)) == 0  # 删掉的没回来
+    assert topics.count((second["topic"], True)) == 1 and (second["topic"], False) not in topics  # 做完的没有多出一份
+    assert ("新增的行动", False) in topics  # 新的行动照常加上
+    assert len(todos) == 2
