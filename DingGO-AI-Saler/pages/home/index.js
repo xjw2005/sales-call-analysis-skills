@@ -279,7 +279,7 @@ Page({
     }
     this.setData({ thinking: false });
     this.setData({
-      practice: { sessionId: res.sessionId, scenarioId, title: res.title, round: 1, total: res.totalRounds },
+      practice: { sessionId: res.sessionId, scenarioId, title: res.title, round: 1, total: res.totalRounds, demo: practice.isDemo() },
       placeholder: '你会怎么回答老板？',
     });
     this.push({ type: 'customer', text: res.reply });

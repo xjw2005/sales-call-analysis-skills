@@ -4,6 +4,9 @@ const scenarios = require('../model/practice');
 
 const sessions = {};
 
+// 当前是否在用本地演示数据（不连后端、不调用 AI）
+const isDemo = () => !!(config.useMock || config.mockPractice);
+
 function listScenarios() {
   if (!config.useMock && !config.mockPractice) return request({ url: '/practice/scenarios' });
   return delay(scenarios.map(({ id, title, concern, level, desc }) => ({ id, title, concern, level, desc })));
@@ -49,4 +52,4 @@ function finish(sessionId) {
   return delay({ total, dims, reference: sc.reference, answers: answers.length }, 800);
 }
 
-module.exports = { listScenarios, scenarioByConcern, start, turn, finish };
+module.exports = { listScenarios, scenarioByConcern, start, turn, finish, isDemo };
