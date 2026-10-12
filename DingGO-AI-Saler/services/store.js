@@ -2,6 +2,10 @@ const config = require('../config/index');
 const { request, delay } = require('./request');
 const seed = require('../model/seed');
 const { listVisits } = require('./visit');
+const cache = require('../utils/cache');
+
+const STORES_TTL = 60 * 1000; // 门店列表（上千家）一分钟内不重复拉
+const storeCache = cache.create('stores', STORES_TTL, () => request({ url: '/stores' }));
 
 // 由最近的拜访结果汇总门店仪表与档案
 function summarize(store, visits) {
@@ -30,8 +34,9 @@ function summarize(store, visits) {
   };
 }
 
-async function listStores() {
-  if (!config.useMock) return request({ url: '/stores' });
+// 门店列表：真实模式有缓存，多个页面共用。{ fresh: true } 强制重新请求（下拉刷新）
+async function listStores({ fresh = false } = {}) {
+  if (!config.useMock) return storeCache.get({ fresh });
   const all = await listVisits();
   return seed.stores
     .map((s) => summarize(s, all.filter((v) => v.storeId === s.id)))
@@ -46,19 +51,32 @@ async function getStore(id) {
   return { ...summarize(store, visits), visits };
 }
 
-function createStore(data) {
-  if (!config.useMock) return request({ url: '/stores', method: 'POST', data });
+// 缓存里已有的门店列表（可能已过期），用来切回页面时先显示、再后台更新；没有或演示模式返回 null
+function peekStores() {
+  return config.useMock ? null : storeCache.peek();
+}
+
+async function createStore(data) {
+  if (!config.useMock) {
+    const store = await request({ url: '/stores', method: 'POST', data });
+    cache.invalidate('stores'); // 新建的门店要马上出现在各处的列表里
+    return store;
+  }
   const store = { id: `s${Date.now()}`, cooperationStatus: '未触达', createdAt: Date.now(), ...data };
   seed.stores.push(store);
   return delay(store);
 }
 
 // 门店档案纠正（对应 correction_field，DSR 人工填写，权威性最高）
-function submitCorrection(id, text) {
-  if (!config.useMock) return request({ url: `/stores/${id}/corrections`, method: 'POST', data: { text } });
+async function submitCorrection(id, text) {
+  if (!config.useMock) {
+    const res = await request({ url: `/stores/${id}/corrections`, method: 'POST', data: { text } });
+    cache.invalidate('stores');
+    return res;
+  }
   const store = seed.stores.find((s) => s.id === id);
   store.correction = text;
   return delay(true);
 }
 
-module.exports = { listStores, getStore, createStore, submitCorrection };
+module.exports = { listStores, peekStores, getStore, createStore, submitCorrection };

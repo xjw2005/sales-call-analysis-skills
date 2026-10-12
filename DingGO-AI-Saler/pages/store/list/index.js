@@ -1,7 +1,7 @@
 const setTab = require('../../../utils/tab');
 const fmt = require('../../../utils/format');
 const { COOP_TONE } = require('../../../utils/constants');
-const { listStores } = require('../../../services/store');
+const { listStores, peekStores } = require('../../../services/store');
 
 const DAY = 24 * 3600 * 1000;
 const PAGE = 40;
@@ -22,16 +22,28 @@ Page({
   },
   onShow() {
     setTab(this, 1);
+    // 切回来先把缓存里的列表显示出来，不让人干等；有效期内不再请求，过期了才后台更新
+    const cached = peekStores();
+    if (cached && !this.data.loaded) this.render(cached);
     this.load();
   },
-  async load() {
+  // 下拉：强制重新请求（失败了转圈也要收起来）
+  onPullDownRefresh() {
+    this.load({ fresh: true }).finally(() => wx.stopPullDownRefresh());
+  },
+  async load({ fresh = false } = {}) {
     let list;
     try {
-      list = await listStores();
+      list = await listStores({ fresh });
     } catch (err) {
       this.setData({ loaded: true });
       return wx.showToast({ title: err.message, icon: 'none' });
     }
+    return this.render(list);
+  },
+  render(list) {
+    if (list === this.rendered) return undefined; // 拿到的还是已经显示着的那份：不重复整理、不重新排版
+    this.rendered = list;
     const stores = list.map((s) => ({
       ...s,
       coopTone: COOP_TONE[s.cooperationStatus] || 'muted',

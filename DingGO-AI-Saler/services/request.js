@@ -1,4 +1,5 @@
 const config = require('../config/index');
+const cache = require('../utils/cache');
 
 const TOKEN_KEY = 'token';
 const USER_KEY = 'user';
@@ -71,6 +72,10 @@ function send({ url, method, data, token }) {
 // 记住当前登录的人，界面上显示的名字都从这里来（合并账号后会变成旧人员的名字）
 function saveUser(user) {
   if (!user) return;
+  let previous = null;
+  try { previous = wx.getStorageSync(USER_KEY); } catch (e) { /* 忽略 */ }
+  // 换了人（绑定、换号）：上一个人的门店等缓存不能留给下一个人看
+  if (!previous || String(previous.id) !== String(user.id)) cache.clearAll();
   try { wx.setStorageSync(USER_KEY, user); } catch (e) { /* 存储不可用时忽略 */ }
   const app = getApp();
   if (app && user.name) app.globalData.userName = user.name;

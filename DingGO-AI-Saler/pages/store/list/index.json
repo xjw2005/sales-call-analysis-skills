@@ -1,4 +1,7 @@
 {
   "navigationBarTitleText": "门店管理",
-  "usingComponents": { "empty-state": "/components/empty-state/index" }
+  "usingComponents": {
+    "empty-state": "/components/empty-state/index"
+  },
+  "enablePullDownRefresh": true
 }
