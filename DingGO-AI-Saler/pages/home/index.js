@@ -96,8 +96,8 @@ Page({
   // ---- 消息工具 ----
   push(...items) {
     const messages = [...this.data.messages, ...items.map((m) => ({ id: mid(), ...m }))];
-    this.setData({ messages, scrollTo: '' });
-    this.setData({ scrollTo: 'bottom' });
+    // 先清空再设回底部：两次设置放在同一帧会被合并，滚动不触发；等这次渲染完再滚
+    this.setData({ messages, scrollTo: '' }, () => this.setData({ scrollTo: 'bottom' }));
     this.saveChat(messages);
   },
   // 替换某条消息（用于刷新今日待办卡片）
@@ -299,7 +299,7 @@ Page({
     }
     if (res.reply) this.push({ type: 'customer', text: res.reply }); // 老板收尾的话也要显示出来
     if (!res.finished) {
-      this.setData({ thinking: false, 'practice.round': p.round + 1 });
+      this.setData({ thinking: false, 'practice.round': res.round || p.round + 1 }); // 轮数以后端为准
       return;
     }
     this.finishPractice();
