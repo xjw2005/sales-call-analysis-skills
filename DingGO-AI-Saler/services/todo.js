@@ -1,6 +1,7 @@
 const config = require('../config/index');
 const { request, delay } = require('./request');
 const { listVisits } = require('./visit');
+const plans = require('./plan');
 const storage = require('../utils/storage');
 const fmt = require('../utils/format');
 const seed = require('../model/seed');
@@ -65,4 +66,21 @@ function setTodoDone(id, isDone) {
   return delay(true, 100);
 }
 
-module.exports = { listTodos, setTodoDone };
+// 「全部待办」= 今日计划要去的店 + 跟进事项（拜访分析生成的行动 / 约定）+ 等你确认费用的录音。
+// 首页「今日待办」卡片、我的待办页、「我的」页的数字都用这一份，不会各说各的。
+async function loadTodoCenter() {
+  const [plan, todos, visits] = await Promise.all([plans.todayPlan(), listTodos(), listVisits()]);
+  const planOpen = plan.filter((p) => p.status !== 'visited');
+  const planDone = plan.filter((p) => p.status === 'visited');
+  const followOpen = todos.filter((t) => !t.done);
+  const followDone = todos.filter((t) => t.done);
+  // 飞书导入的历史录音文件还没迁移，不能确认识别，不算待处理
+  const recordings = visits.filter((v) => v.status === 'cost_pending' && !v.legacy);
+  return {
+    planOpen, planDone, followOpen, followDone, recordings,
+    openCount: planOpen.length + followOpen.length + recordings.length,
+    doneCount: planDone.length + followDone.length,
+  };
+}
+
+module.exports = { listTodos, setTodoDone, loadTodoCenter };

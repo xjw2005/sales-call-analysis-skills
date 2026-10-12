@@ -1,3 +1,4 @@
+.sec-title { font-size: 28rpx; font-weight: 600; color: #6b6f8e; margin: 28rpx 8rpx 12rpx; }
 .store { font-size: 26rpx; color: #5b55e8; }
 .topic { font-size: 32rpx; font-weight: 600; margin: 14rpx 0 8rpx; }
 .action { font-size: 28rpx; line-height: 1.7; margin-bottom: 8rpx; }

@@ -7,3 +7,4 @@
 .menu { padding: 0 32rpx; }
 .menu-item { padding: 32rpx 0; border-bottom: 2rpx solid #f0f1f6; font-size: 30rpx; }
 .menu-item:last-child { border-bottom: none; }
+.todo-badge { min-width: 40rpx; height: 40rpx; line-height: 40rpx; padding: 0 12rpx; box-sizing: border-box; border-radius: 20rpx; background: #f0544f; color: #fff; font-size: 24rpx; text-align: center; margin-right: 12rpx; }

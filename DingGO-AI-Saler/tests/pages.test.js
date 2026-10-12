@@ -63,6 +63,7 @@ function me(extra = {}) {
       'services/request.js': { refreshUser: async () => null },
       'services/visit.js': { listVisits: extra.listVisits || (async () => []) },
       'services/chat.js': { clearSessions: extra.clearSessions || (async () => { calls.clear += 1; }) },
+      'services/todo.js': { loadTodoCenter: extra.loadTodoCenter || (async () => ({ openCount: 0 })) },
     },
   });
   env.app.globalData.userName = '王荣伟';
@@ -149,14 +150,19 @@ test('拜访列表：按状态筛选，「待确认」不含历史导入的', as
 });
 
 // ---------- 待办 ----------
+const center = (over = {}) => ({
+  planOpen: [], planDone: [], followOpen: [], followDone: [], recordings: [], openCount: 0, doneCount: 0, ...over,
+});
+
 test('待办：标记完成失败时提示原因；成功后列表刷新', async () => {
   let fail = true;
-  let items = [{ id: 't1', topic: '送物料', done: false, storeName: '甲店' }];
+  let open = [{ id: 't1', topic: '送物料', done: false, storeName: '甲店' }];
+  let done = [];
   const { page, log } = mountPage('pages/todo/index.js', {
     stubs: {
       'services/todo.js': {
-        listTodos: async () => items,
-        setTodoDone: async (id, done) => { if (fail) throw new Error('网络异常'); items = items.map((t) => (t.id === id ? { ...t, done } : t)); },
+        loadTodoCenter: async () => center({ followOpen: open, followDone: done, openCount: open.length, doneCount: done.length }),
+        setTodoDone: async (id, d) => { if (fail) throw new Error('网络异常'); done = d ? [...open.map((t) => ({ ...t, done: true }))] : []; open = d ? [] : open; },
       },
     },
   });
@@ -170,6 +176,103 @@ test('待办：标记完成失败时提示原因；成功后列表刷新', async
   await tick();
   assert.strictEqual(page.data.open.length, 0);
   assert.strictEqual(page.data.done.length, 1);
+});
+
+test('待办页：今日计划、跟进事项、待确认录音都在「待办」里，数字是三类之和', async () => {
+  const data = center({
+    planOpen: [{ id: 'p1', storeId: 's1', name: '阳光苗苗学府一号店', reason: '9月销量 0' }, { id: 'p2', storeId: 's2', name: '建辉乳业', reason: '' }],
+    planDone: [{ id: 'p3', storeId: 's3', name: '已去的店', visitId: 'v9' }],
+    followOpen: [{ id: 't1', topic: '送物料', storeName: '甲店', storeId: 's1', due: { text: '明天到期', tone: 'info' } }],
+    followDone: [{ id: 't2', topic: '发资料', storeName: '乙店', storeId: 's2', done: true }],
+    recordings: [{ id: 'v7', storeId: 's4', storeName: '丁店', createdAt: Date.now(), durationSec: 300, estCost: 0.5 }],
+    openCount: 4, doneCount: 2,
+  });
+  const { page } = mountPage('pages/todo/index.js', { stubs: { 'services/todo.js': { loadTodoCenter: async () => data, setTodoDone: async () => true } } });
+  await page.onShow();
+  await tick();
+  assert.deepStrictEqual([page.data.planOpen.length, page.data.open.length, page.data.recs.length], [2, 1, 1]);
+  assert.strictEqual(page.data.openCount, 4);
+  assert.strictEqual(page.data.doneCount, 2);
+  assert.strictEqual(page.data.recs[0].durText, '05:00');
+  assert.strictEqual(page.data.loaded, true);
+});
+
+test('待办页：今日计划里的店可以直接看简报、到店录音、看拜访', async () => {
+  const { page, log, app } = mountPage('pages/todo/index.js', { stubs: { 'services/todo.js': { loadTodoCenter: async () => center(), setTodoDone: async () => true } } });
+  page.openBrief({ currentTarget: { dataset: { store: 's1' } } });
+  page.recordStore({ currentTarget: { dataset: { store: 's2' } } });
+  page.openVisit({ currentTarget: { dataset: { id: 'v9' } } });
+  assert.deepStrictEqual(log.navigations, ['navigateTo:/pages/brief/index?storeId=s1', 'navigateTo:/pages/record/index?storeId=s2', 'navigateTo:/pages/visit/detail/index?id=v9']);
+  assert.strictEqual(app.globalData.currentStoreId, 's2');
+});
+
+test('待办页：加载失败时提示原因，页面不会一直空白转圈', async () => {
+  const { page, log } = mountPage('pages/todo/index.js', { stubs: { 'services/todo.js': { loadTodoCenter: async () => { throw new Error('网络异常'); }, setTodoDone: async () => true } } });
+  await page.onShow();
+  await tick();
+  assert.ok(log.toasts.includes('网络异常'));
+  assert.strictEqual(page.data.loaded, true);
+});
+
+test('待办页：没有任何待办才显示「待办都完成了」', () => {
+  const wxml = fs.readFileSync(path.join(ROOT, 'pages/todo/index.wxml'), 'utf8');
+  assert.ok(/wx:if="\{\{loaded && !openCount\}\}"/.test(wxml)); // 以三类之和为准，不是只看跟进事项
+});
+
+// 统一口径：首页卡片、待办页、「我的」页用同一份数据
+function centerEnv({ plan = [], todos = [], visits = [], fail = '' } = {}) {
+  return mountPage('pages/me/index.js', {
+    config: { useMock: false, transport: 'http', baseUrl: 'http://x' },
+    storage: { token: 'T', user: { id: '1', name: '甲' } },
+    onWx: (wx) => {
+      wx.request = (o) => {
+        const data = { '/plans/today': plan, '/todos': todos, '/visits': visits }[o.url.replace('http://x', '').split('?')[0]];
+        if (fail && o.url.endsWith(fail)) return o.fail({ errMsg: '网络异常' });
+        return o.success({ statusCode: 200, data: data || [] });
+      };
+    },
+  });
+}
+test('全部待办的统计：今日计划要去的 + 未完成的跟进事项 + 待确认录音（历史导入的不算）', async () => {
+  centerEnv({
+    plan: [{ id: 'p1', status: 'planned', storeId: 's1' }, { id: 'p2', status: 'planned', storeId: 's2' }, { id: 'p3', status: 'visited', storeId: 's3', visitId: 'v1' }],
+    todos: [{ id: 't1', done: false }, { id: 't2', done: true }, { id: 't3', done: true }],
+    visits: [{ id: 'v1', status: 'cost_pending', legacy: false }, { id: 'v2', status: 'cost_pending', legacy: true }, { id: 'v3', status: 'done' }],
+  });
+  const { loadTodoCenter } = require(path.join(ROOT, 'services/todo.js'));
+  const c = await loadTodoCenter();
+  assert.deepStrictEqual([c.planOpen.length, c.planDone.length, c.followOpen.length, c.followDone.length, c.recordings.length], [2, 1, 1, 2, 1]);
+  assert.strictEqual(c.openCount, 4); // 2 + 1 + 1
+  assert.strictEqual(c.doneCount, 3); // 1 已去 + 2 已完成
+});
+
+test('全部待办：有计划但没有跟进事项时，也不是 0（就是你截图里的情况）', async () => {
+  centerEnv({ plan: [{ id: 'p1', status: 'planned' }, { id: 'p2', status: 'planned' }], todos: [{ id: 't1', done: true }, { id: 't2', done: true }, { id: 't3', done: true }] });
+  const { loadTodoCenter } = require(path.join(ROOT, 'services/todo.js'));
+  const c = await loadTodoCenter();
+  assert.strictEqual(c.openCount, 2);
+  assert.strictEqual(c.followOpen.length, 0);
+});
+
+test('全部待办：任何一个请求失败就整体报错，不会悄悄少算', async () => {
+  centerEnv({ fail: '/todos' });
+  const { loadTodoCenter } = require(path.join(ROOT, 'services/todo.js'));
+  await assert.rejects(loadTodoCenter(), /网络异常/);
+});
+
+test('我的：有「我的待办」入口，带未完成数量，点进待办页；取不到数量不影响别的', async () => {
+  const { page, log } = me({ loadTodoCenter: async () => ({ openCount: 5 }) });
+  await page.onShow();
+  await tick();
+  assert.strictEqual(page.data.todoCount, 5);
+  page.openTodos();
+  assert.deepStrictEqual(log.navigations, ['navigateTo:/pages/todo/index']);
+  const wxml = fs.readFileSync(path.join(ROOT, 'pages/me/index.wxml'), 'utf8');
+  assert.ok(wxml.includes('bindtap="openTodos"') && wxml.includes('{{todoCount}}'));
+  const broken = me({ loadTodoCenter: async () => { throw new Error('网络异常'); } });
+  await broken.page.onShow();
+  await tick();
+  assert.strictEqual(broken.page.data.todoCount, 0);
 });
 
 // ---------- 录音：上传失败后重试 ----------

@@ -1,26 +1,84 @@
 <view class="container">
   <view class="segment">
-    <view class="segment-item {{tab === 0 ? 'active' : ''}}" data-i="0" bindtap="switchTab">待办 {{open.length}}</view>
-    <view class="segment-item {{tab === 1 ? 'active' : ''}}" data-i="1" bindtap="switchTab">已完成 {{done.length}}</view>
+    <view class="segment-item {{tab === 0 ? 'active' : ''}}" data-i="0" bindtap="switchTab">待办 {{openCount}}</view>
+    <view class="segment-item {{tab === 1 ? 'active' : ''}}" data-i="1" bindtap="switchTab">已完成 {{doneCount}}</view>
   </view>
-  <view wx:for="{{tab === 0 ? open : done}}" wx:key="id" class="card todo {{item.done ? 'is-done' : ''}}">
-    <view class="row between">
-      <text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.storeName}} ›</text>
-      <text wx:if="{{!item.done}}" class="tag {{item.due.tone}}">{{item.due.text}}</text>
-    </view>
-    <view class="topic">{{item.topic}}</view>
-    <view wx:if="{{item.action}}" class="action">{{item.action}}</view>
-    <view wx:if="{{item.hasTarget}}" class="target">
-      <view class="row between"><text>目标 {{item.targetQty}}{{item.unit}} · 已达成 {{item.achievedQty || 0}}{{item.unit}}</text><text class="faint">差 {{item.gapQty}}{{item.unit}}</text></view>
-      <view class="bar"><view class="bar-fill" style="width:{{item.pct}}%"></view></view>
-      <view wx:if="{{item.progressNote}}" class="faint">{{item.progressNote}}</view>
-    </view>
-    <view wx:if="{{item.acceptance}}" class="faint">验收：{{item.acceptance}}</view>
-    <view class="btns row">
-      <view wx:if="{{!item.done}}" class="fb" data-id="{{item.id}}" bindtap="copy">复制微信话术</view>
-      <view class="{{item.done ? 'fb' : 'fb-primary'}}" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">{{item.done ? '撤销完成' : '标记完成'}}</view>
-    </view>
-  </view>
-  <empty-state wx:if="{{tab === 0 && !open.length}}" compact title="待办都完成了" desc="拜访分析完成后，建议行动会自动出现在这里" />
-  <empty-state wx:if="{{tab === 1 && !done.length}}" compact title="还没有完成的事项" />
+
+  <!-- 待办：今日计划 / 跟进事项 / 待确认录音 -->
+  <block wx:if="{{tab === 0}}">
+    <block wx:if="{{planOpen.length}}">
+      <view class="sec-title">今日计划 · 要去的店</view>
+      <view wx:for="{{planOpen}}" wx:key="id" class="card todo">
+        <view class="row between">
+          <text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.name}} ›</text>
+          <text class="tag info">待去</text>
+        </view>
+        <view wx:if="{{item.reason || item.district}}" class="action">{{item.reason || item.district}}</view>
+        <view class="btns row">
+          <view class="fb" data-store="{{item.storeId}}" bindtap="openBrief">看简报</view>
+          <view class="fb-primary" data-store="{{item.storeId}}" bindtap="recordStore">到店录音</view>
+        </view>
+      </view>
+    </block>
+
+    <block wx:if="{{open.length}}">
+      <view class="sec-title">跟进事项</view>
+      <view wx:for="{{open}}" wx:key="id" class="card todo">
+        <view class="row between">
+          <text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.storeName}} ›</text>
+          <text class="tag {{item.due.tone}}">{{item.due.text}}</text>
+        </view>
+        <view class="topic">{{item.topic}}</view>
+        <view wx:if="{{item.action}}" class="action">{{item.action}}</view>
+        <view wx:if="{{item.hasTarget}}" class="target">
+          <view class="row between"><text>目标 {{item.targetQty}}{{item.unit}} · 已达成 {{item.achievedQty || 0}}{{item.unit}}</text><text class="faint">差 {{item.gapQty}}{{item.unit}}</text></view>
+          <view class="bar"><view class="bar-fill" style="width:{{item.pct}}%"></view></view>
+          <view wx:if="{{item.progressNote}}" class="faint">{{item.progressNote}}</view>
+        </view>
+        <view wx:if="{{item.acceptance}}" class="faint">验收：{{item.acceptance}}</view>
+        <view class="btns row">
+          <view class="fb" data-id="{{item.id}}" bindtap="copy">复制微信话术</view>
+          <view class="fb-primary" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">标记完成</view>
+        </view>
+      </view>
+    </block>
+
+    <block wx:if="{{recs.length}}">
+      <view class="sec-title">待确认的录音</view>
+      <view wx:for="{{recs}}" wx:key="id" class="card todo">
+        <view class="row between">
+          <text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.storeName}} ›</text>
+          <text class="tag warn">待确认</text>
+        </view>
+        <view class="action">{{item.timeText}} · 录音 {{item.durText}}，预估识别费 ¥{{item.estCost}}，确认后自动分析</view>
+        <view class="btns row"><view class="fb-primary" data-id="{{item.id}}" bindtap="openVisit">去确认</view></view>
+      </view>
+    </block>
+
+    <empty-state wx:if="{{loaded && !openCount}}" compact title="待办都完成了" desc="今日计划、到期的约定和跟进、待确认的录音，都会出现在这里" />
+  </block>
+
+  <!-- 已完成：今日已去的店 / 完成的跟进事项 -->
+  <block wx:else>
+    <block wx:if="{{planDone.length}}">
+      <view class="sec-title">今日已去</view>
+      <view wx:for="{{planDone}}" wx:key="id" class="card todo">
+        <view class="row between">
+          <text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.name}} ›</text>
+          <text class="tag success">已去</text>
+        </view>
+        <view class="btns row"><view class="fb" data-id="{{item.visitId}}" bindtap="openVisit">看拜访</view></view>
+      </view>
+    </block>
+    <block wx:if="{{done.length}}">
+      <view class="sec-title">已完成的跟进事项</view>
+      <view wx:for="{{done}}" wx:key="id" class="card todo is-done">
+        <view class="row between"><text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.storeName}} ›</text></view>
+        <view class="topic">{{item.topic}}</view>
+        <view wx:if="{{item.action}}" class="action">{{item.action}}</view>
+        <view class="btns row"><view class="fb" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">撤销完成</view></view>
+      </view>
+    </block>
+    <empty-state wx:if="{{loaded && !doneCount}}" compact title="还没有完成的事项" />
+  </block>
 </view>

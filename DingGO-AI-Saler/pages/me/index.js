@@ -4,11 +4,12 @@ const fmt = require('../../utils/format');
 const { listVisits } = require('../../services/visit');
 const { refreshUser } = require('../../services/request');
 const { clearSessions } = require('../../services/chat');
+const { loadTodoCenter } = require('../../services/todo');
 
 const app = getApp();
 
 Page({
-  data: { userName: '', initial: '', roleText: '销售', useMock: config.useMock, stats: { visits: 0, minutes: 0, cost: '0.00' } },
+  data: { userName: '', initial: '', roleText: '销售', useMock: config.useMock, todoCount: 0, stats: { visits: 0, minutes: 0, cost: '0.00' } },
   async onShow() {
     setTab(this, 3);
     this.showUser();
@@ -17,6 +18,18 @@ Page({
       this.showUser();
     }
     this.load();
+    this.loadTodoCount();
+  },
+  // 「我的待办」入口上的数字：和待办页、首页卡片同一个口径；取不到就不显示，不影响别的
+  async loadTodoCount() {
+    try {
+      this.setData({ todoCount: (await loadTodoCenter()).openCount });
+    } catch (err) {
+      this.setData({ todoCount: 0 });
+    }
+  },
+  openTodos() {
+    wx.navigateTo({ url: '/pages/todo/index' });
   },
   // 名字、头像字、角色都跟着当前登录的人走（不再固定写「熊」和「销售」）
   showUser() {
