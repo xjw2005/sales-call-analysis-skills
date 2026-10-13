@@ -102,7 +102,8 @@ sudo systemctl daemon-reload && sudo systemctl enable --now dinggo-api
 ### 部署后自测
 
 `/health` 只说明程序起来了。下面几条命令再确认：登录、写数据库、读数据库、权限都真的通。
-在**服务器上**执行（`BASE` 换成实际地址；需要 `.env` 里 `DEV_LOGIN=true`，登录用的是开发登录）：
+在**服务器上**执行（`BASE` 换成实际地址；需要 `.env` 里 `DEV_LOGIN=true`，登录用的是开发登录）。
+已经切到正式微信登录（`DEV_LOGIN=false`）的服务器，第 2 条拿不到凭证属正常，**不要为了自测把 `DEV_LOGIN` 改回 true**；第 1、7 条照跑，第 3～6 条改用小程序真机操作一遍（新建门店、登记无录音拜访、看首页今日待办）。
 
 ```bash
 BASE=http://127.0.0.1:8000
@@ -127,7 +128,7 @@ curl -s $BASE/stores -H "Authorization: Bearer $TOKEN" | cut -c1-100
 curl -s -X POST $BASE/visits -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"storeId\":\"$STORE_ID\",\"stage\":\"日常维护\",\"recordingMode\":\"none\",\"noRecordingReason\":\"自测\"}" | cut -c1-140
 
-# 6. 今日待办  → {"count":0,"hint":"今天暂无到期的跟进事项",...}
+# 6. 今日待办  → {"count":0,"hint":"今天还没有计划，新建对话告诉我要去哪",...}
 curl -s "$BASE/assistant/today" -H "Authorization: Bearer $TOKEN" | cut -c1-90
 
 # 7. 不带凭证必须被拒绝  → {"message":"请先登录"}
