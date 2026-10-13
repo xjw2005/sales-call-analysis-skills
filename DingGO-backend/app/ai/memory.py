@@ -1,8 +1,14 @@
 """助手对「这个人」的记忆（学自 eigent 的轻量记忆：分层、带来源、模型只能提议、用户确认才生效）。
 
-只记「这个人怎么说话、怎么用」：地区别名（城东 = 官渡区 + 呈贡区）、常跑区域、纠正过的做法。
-不记会变的业务事实（销量、计划、拜访都实时查库）。每个人只能读写自己的记忆；
-经理可以把自己的别名设为团队通用（scope=team），其下属也能用。
+四类：
+- alias 说法：地区别名（城东 = 官渡区 + 呈贡区）；
+- preference 使用习惯：常跑区域、喜欢的回答方式；
+- lesson 纠正过的做法；
+- fact 你教我的知识：销售告诉助手的产品、品牌、政策等说法（如「A2 是 XX 旗下」）。只对本人生效，
+  **未经公司核实**：助手引用时要说明是销售说的，与公司知识库冲突时以知识库为准并提醒销售。
+不记会变的业务数据（销量、计划、拜访都实时查库）。每个人只能读写自己的记忆；
+经理可以把自己的说法 / 习惯设为团队通用（scope=team），其下属也能用；「你教我的知识」不能设为团队通用
+（要变成团队知识，应由经理审核后进公司知识库，见 README）。
 """
 
 import re
@@ -13,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..models import User, UserMemory, utcnow
 
-KINDS = ("alias", "preference", "lesson")
+KINDS = ("alias", "preference", "lesson", "fact")
 MAX_PER_USER = 30  # 每人最多保留的记忆条数（已生效 + 待确认）
 PENDING_TTL_DAYS = 14  # 待确认的提议放这么久没人理就清掉
 PROMPT_CHARS = 400  # 每次提问带给模型的记忆总字数上限
@@ -34,10 +40,26 @@ def _norm_value(kind: str, value):
         if not items:
             raise MemoryError_("别名要指向至少一个地区或关键词")
         return items[:8]
-    text = str(value or "").strip()[:200]
+    text = str(value or "").strip()[:300 if kind == "fact" else 200]
     if not text:
         raise MemoryError_("内容不能为空")
     return text
+
+
+def _terms(text: str) -> set[str]:
+    """用来判断「这条知识和这句话有没有关系」的词：英文 / 数字词（a2、900g），中文按两个字一组"""
+    text = (text or "").lower()
+    words = set(re.findall(r"[a-z0-9]+", text))
+    for run in re.findall(r"[一-鿿]+", text):
+        words |= {run[i:i + 2] for i in range(len(run) - 1)} if len(run) > 1 else {run}
+    return words
+
+
+def _fact_hit(m: UserMemory, question: str) -> bool:
+    """「你教我的知识」只在相关时带：主题词出现在这句话里，或主题词里的词和这句话有重合"""
+    q = question.lower()
+    key = (m.key or "").lower()
+    return bool(key and key in q) or bool(_terms(m.key) & _terms(question))
 
 
 def manager_chain(db: Session, user: User, depth: int = 3) -> list[int]:
@@ -64,25 +86,35 @@ def visible(db: Session, user: User, status: str | None = "active") -> list[User
 def render(m: UserMemory) -> str:
     if m.kind == "alias":
         return f"「{m.key}」指 {'、'.join(m.value or [])}"
+    if m.kind == "fact":
+        return f"关于「{m.key}」：{m.value}" if m.key else str(m.value)
     return f"{m.key}：{m.value}" if m.key else str(m.value)
 
 
-def relevant_text(db: Session, user: User, question: str) -> str:
-    """只取和这句话相关的记忆：别名在话里出现的；偏好/纠正类总是带（量很少）。命中的计数 +1"""
-    out, used, hit = [], 0, []
+def relevant(db: Session, user: User, question: str) -> tuple[str, str]:
+    """只取和这句话相关的记忆，返回 (说法和习惯, 你教我的知识) 两段文字：
+    别名、知识在话里提到才带；偏好 / 纠正类总是带（量很少）。命中的计数 +1"""
+    said, facts, used, hit = [], [], 0, []
     for m in visible(db, user):
         if m.kind == "alias" and m.key not in question:
+            continue
+        if m.kind == "fact" and not _fact_hit(m, question):
             continue
         line = "- " + render(m) + ("（团队通用）" if m.scope == "team" and m.user_id != user.id else "")
         if used + len(line) > PROMPT_CHARS:
             continue
-        out.append(line)
+        (facts if m.kind == "fact" else said).append(line)
         used += len(line)
         hit.append(m)
     for m in hit:
         m.hits += 1
         m.last_used_at = utcnow()
-    return "\n".join(out)
+    return "\n".join(said), "\n".join(facts)
+
+
+def relevant_text(db: Session, user: User, question: str) -> str:
+    """兼容旧调用：两段合在一起"""
+    return "\n".join(x for x in relevant(db, user, question) if x)
 
 
 def _prune(db: Session, user: User) -> None:
@@ -97,14 +129,15 @@ def propose(db: Session, user: User, kind: str, key: str, value, reason: str = "
     """模型提议记忆。返回 (记忆, 状态说明)。
     user_said=True 且「说法」确实出现在销售这句话里 → 视为销售明确说的，直接生效；否则只是待确认，必须销售点确认。"""
     if kind not in KINDS:
-        raise MemoryError_("记忆类型只能是 alias、preference、lesson")
+        raise MemoryError_("记忆类型只能是 alias、preference、lesson、fact")
     key = norm_key(key)
     if kind == "alias" and not key:
         raise MemoryError_("要有说法的名字")
     value = _norm_value(kind, value)
     _prune(db, user)
     existing = db.scalars(select(UserMemory).where(UserMemory.user_id == user.id, UserMemory.kind == kind, UserMemory.key == key, UserMemory.scope == "user")).first()
-    explicit = bool(user_said and question and (key in question if key else True))
+    # 不分大小写：销售说「A2」、模型记成「a2」也算原话里有
+    explicit = bool(user_said and question and (key.lower() in question.lower() if key else True))
     if existing is not None:
         if existing.status == "active" and existing.value == value:
             return existing, "已经记住了"
@@ -164,6 +197,8 @@ def set_team(db: Session, user: User, memory_id: int, team: bool) -> UserMemory:
         raise MemoryError_("请先确认这条记忆")
     if m.kind == "lesson":
         raise MemoryError_("纠正过的做法只对自己生效")
+    if m.kind == "fact":
+        raise MemoryError_("你教给助手的知识只对自己生效；要让全团队都用，需要审核后放进公司知识库")
     m.scope = "team" if team else "user"
     return m
 

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import threading
 import time
@@ -413,6 +414,65 @@ def _compute_block(module: str) -> tuple[str, frozenset[str]]:
         return "", frozenset()
     entries = select_knowledge(base, spec.get("selection", []), spec.get("max_tokens"))
     return render_block(entries, spec.get("instruction", "")), frozenset(e.id for e in entries)
+
+
+_STOP_TERMS = {"什么", "怎么", "哪个", "哪些", "这个", "那个", "我们", "你们", "可以", "一下", "是不", "不是", "有没", "没有"}
+# 销售的问法和资料里的写法不一样时，补上资料里的说法（问「A2 是什么旗下」，资料里写的是「品牌背景」「公司定位」）
+_SYNONYMS = {"旗下": ["品牌", "公司"], "哪家": ["公司", "品牌"], "厂家": ["品牌", "公司"], "背景": ["品牌", "公司"], "老板": ["公司"],
+             "多少钱": ["价格"], "价钱": ["价格"], "卖点": ["卖点"], "成分": ["营养", "成分"]}
+
+
+def _q_terms(text: str) -> set[str]:
+    """问题里的检索词：英文 / 数字词（a2、900g），中文两个字一组；去掉「什么」「怎么」这类没有区分度的词"""
+    text = (text or "").lower()
+    words = {w for w in re.findall(r"[a-z0-9]+", text) if len(w) >= 2 or w.isdigit()}
+    for run in re.findall(r"[一-鿿]+", text):
+        words |= {run[i:i + 2] for i in range(len(run) - 1)}
+    for k, extra in _SYNONYMS.items():
+        if k in text:
+            words |= set(extra)
+    return words - _STOP_TERMS
+
+
+def relevant_entries(question: str, max_tokens: int = 1500, limit: int = 3) -> list[KnowledgeEntry]:
+    """首页对话用：按问题里的词，从整个知识库挑最相关的几条（标题、标签命中权重高）。
+    知识库没开或没有相关条目时返回空"""
+    if not _ENABLED or _ROOT is None:
+        return []
+    _refresh_cache()
+    base = _base()
+    terms = _q_terms(question)
+    if base is None or not terms:
+        return []
+    docs = [(e, (e.title + " " + " ".join(e.tags)).lower(), e.content.lower()) for e in base.entries if e.status == "active"]
+    if not docs:
+        return []
+    # 越少见的词越重要：「a2」几乎每条都有，靠它挑不出东西；「品牌」「紫白金」才有区分度
+    n = len(docs)
+    weight = {}
+    for t in terms:
+        df = sum(1 for _, head, body in docs if t in head or t in body)
+        if df:
+            weight[t] = math.log((n + 1) / df)
+    scored = []
+    for e, head, body in docs:
+        score = sum(w * (3 if t in head else 1) for t, w in weight.items() if t in head or t in body)
+        if score >= 1.5:  # 只碰上一个常见词的不算
+            scored.append((score, e.id, e))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    out, used = [], 0
+    for _, _, e in scored[:limit]:
+        cost = estimate_tokens(_render_entry(e))
+        if out and used + cost > max_tokens:
+            break
+        out.append(e)
+        used += cost
+    return out
+
+
+def relevant_block(question: str, max_tokens: int = 1500) -> str:
+    entries = relevant_entries(question, max_tokens)
+    return "\n\n".join(_render_entry(e) for e in entries)
 
 
 def injected_ids(module: str) -> frozenset[str]:

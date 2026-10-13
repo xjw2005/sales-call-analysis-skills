@@ -162,3 +162,51 @@ def test_deleting_chat_that_proposed_a_memory_keeps_the_memory(client):
     assert client.delete("/chat/sessions", headers=h).json() == {"deleted": 1}
     with SessionLocal() as db:
         assert sorted((m.key, m.session_id) for m in db.query(UserMemory)) == [("城东", None), ("城西", None)]
+
+
+# ---------- 你教我的知识（fact）+ 公司知识库 ----------
+def test_fact_taught_by_sales_is_remembered_cited_and_only_brought_up_when_relevant(client, auth, monkeypatch):
+    scripted(monkeypatch, [
+        {"action": "tool", "tool": "propose_memory", "args": {"kind": "fact", "key": "a2", "value": "a2 是达能旗下的品牌", "user_said": True}},
+        {"action": "answer", "reply": "记住了。", "suggestions": []},
+    ])
+    r = chat(client, auth, "记住，A2 是达能旗下的")  # 销售写大写 A2、模型记成小写 a2，也算原话里有
+    assert r["memory"]["status"] == "active" and "达能" in r["memory"]["text"]
+    item = client.get("/memories", headers=auth).json()["items"][0]
+    assert item["kind"] == "fact" and item["text"] == "关于「a2」：a2 是达能旗下的品牌"
+
+    seen = []
+    scripted(monkeypatch, [{"action": "answer", "reply": "好", "suggestions": []}], seen)
+    chat(client, auth, "A2是什么旗下的")
+    assert "销售自己教给你的知识（未经公司核实）" in seen[0] and "达能" in seen[0]
+    assert "助手记住的说法" not in seen[0]  # 知识和说法分开放，模型知道哪些要标来源
+    seen.clear()
+    scripted(monkeypatch, [{"action": "answer", "reply": "好", "suggestions": []}], seen)
+    chat(client, auth, "渝中区有哪些店")
+    assert "达能" not in seen[0]  # 不相关的问题不带
+
+
+def test_fact_cannot_be_shared_to_team(client, monkeypatch):
+    h, u = login_user(client, "boss", "经理")
+    client.patch(f"/admin/users/{u['id']}", json={"role": "manager"}, headers=ADMIN)
+    mid = client.post("/memories", json={"kind": "fact", "key": "紫白金", "value": "紫白金下月换包装"}, headers=h).json()["id"]
+    r = client.post(f"/memories/{mid}/team", json={"team": True}, headers=h)
+    assert r.status_code == 400 and "公司知识库" in r.json()["message"]
+
+
+def test_company_knowledge_relevant_to_question_is_in_prompt(client, auth, monkeypatch):
+    from pathlib import Path
+
+    from app.ai import knowledge as kb
+
+    root = Path(__file__).resolve().parents[1] / "knowledge" / "a2"
+    monkeypatch.setattr(core, "init_knowledge", lambda: kb.configure(root=root, enabled=True, mode="manifest"))
+    seen = []
+    scripted(monkeypatch, [{"action": "answer", "reply": "好", "suggestions": []}], seen)
+    chat(client, auth, "A2是什么旗下的")
+    assert "公司知识库里和这个问题相关的资料" in seen[0] and "品牌背景" in seen[0]
+    seen.clear()
+    scripted(monkeypatch, [{"action": "answer", "reply": "好", "suggestions": []}], seen)
+    chat(client, auth, "城东有哪些店")
+    assert "公司知识库里和这个问题相关的资料" not in seen[0]
+    kb.configure(root=None, enabled=False, mode="manifest")

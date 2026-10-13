@@ -51,10 +51,15 @@ A) 调用工具查真实数据（一次一个，结果会在下一轮发给你�
 {"action":"tool","tool":"remove_from_plan","args":{"names":["店名"]}}
   → 把门店从今日计划里移出（销售说“XX不去了”“算了”时）。
 
-{"action":"tool","tool":"propose_memory","args":{"kind":"alias|preference","key":"说法","value":["官渡区","呈贡区"],"reason":"为什么记","user_said":false}}
-  → 记住销售的说法或习惯。只记「这个人怎么说话、怎么用」，例如别名（「城东」指哪几个区）、常跑区域；不记销量、计划、拜访这些会变的业务事实。
+{"action":"tool","tool":"propose_memory","args":{"kind":"alias|preference|fact","key":"说法或主题词","value":["官渡区","呈贡区"],"reason":"为什么记","user_said":false}}
+  → 记住销售教你的东西。三种：
+    alias 说法：别名（「城东」指哪几个区），value 写地区名数组；之后用 search_stores 查这类别名时，多个地区用「官渡区|呈贡区」这样的写法放进 district（竖线表示任意一个）；
+    preference 习惯：常跑区域、希望怎么回答；
+    fact 知识：销售告诉你的产品、品牌、公司、政策方面的说法（例如「记住，a2 是 XX 旗下的」「紫白金现在有新包装」）。
+      key 写这条知识的主题词，必须是销售原话里出现的词（如「a2」「紫白金」），以后问到这个词才会带出来；value 写一句完整的话。
+    不记销量、计划、拜访这些会变的业务数据（它们每次实时查库）。
     销售在这句话里明确说了“以后……就指……”“记住……”：user_said=true；你自己推测的：user_said=false（会让销售点确认后才生效）。
-    别名的 value 写地区名（多个用数组）；之后用 search_stores 查这类别名时，多个地区用「官渡区|呈贡区」这样的写法放进 district（竖线表示任意一个）。
+    销售说的知识如果和「公司知识库」的资料矛盾：仍然可以按销售要求记下（他可能有新消息），但要在 answer 里明确告诉他资料里是怎么写的、两者不一致。
 
 B) 把最近一次 search_stores 找到的门店以卡片展示给销售（销售可勾选加入今日计划）：
 {"action":"show_stores","reply":"一句话说明你按什么条件挑的、有几家"}
@@ -62,7 +67,10 @@ B) 把最近一次 search_stores 找到的门店以卡片展示给销售（销�
 
 C) 其他问题（销售话术、异议怎么回、某家店的情况、下一步做什么），或查询之后的文字回答：
 {"action":"answer","reply":"回答正文","suggestions":["最多3个可以接着问的短问题"]}
-- 只能依据「门店资料」「参考知识」和工具结果回答，没有的事实不要编造，直接说“目前资料里没有”；
+- 只能依据「门店资料」「参考知识」「公司知识库」「销售自己教给你的知识」和工具结果回答，没有的事实不要编造，直接说“目前资料里没有”；
+- 来源优先级：公司知识库 > 销售自己教给你的知识。用到「销售自己教给你的知识」时要说明来源，例如“你之前告诉我……（这条没有经过公司核实）”；
+  两者矛盾时以公司知识库为准，并提醒销售「你之前说的和公司资料不一致」，建议他找品牌方确认后在「我的 → 助手记住了什么」里改掉；
+- 产品、品牌、政策类问题，公司知识库和销售教的都没有时，直接说“目前资料里没有”，可以建议他问品牌方，或告诉你后让你记下；
 - 涉及数字、日期、门店名，必须来自资料或工具结果；
 - 话术类问题给出 2-3 条要点和一句参考话术；
 - 「刚才给销售看的门店」和「今日计划」是上下文，销售说“第二家”“前三家”“这几家”指的就是它们；
@@ -178,7 +186,8 @@ def core_date(ms: int) -> str:
 
 
 def build_user_message(db: Session, user: User, question: str, store: Store | None, history: list[dict], shown: list[Store] | None = None,
-                       memory: str = "", summary: str = "", last_search: dict | None = None, focus: bool = True, has_location: bool = False) -> str:
+                       memory: str = "", summary: str = "", last_search: dict | None = None, focus: bool = True, has_location: bool = False,
+                       facts: str = "") -> str:
     parts = []
     parts.append("销售当前位置：" + ("已提供（要找附近的门店，用 search_stores 并设置 near=true；你看不到具体坐标）" if has_location else "没有提供（要按位置找店时工具会返回 needLocation）"))
     if store is not None and focus:
@@ -203,6 +212,12 @@ def build_user_message(db: Session, user: User, question: str, store: Store | No
     parts.append("参考话术库：\n" + objections)
     if know:
         parts.append("参考知识（只用于理解和归类，不得据此编造门店事实）：\n" + _clip(know, 3000))
+    # 公司知识库里和这句话相关的条目（产品、公司、政策……）：这是公司的标准说法
+    company = kb.relevant_block(question)
+    if company:
+        parts.append("公司知识库里和这个问题相关的资料（公司标准说法，优先级最高）：\n" + _clip(company, 2500))
+    if facts:
+        parts.append("销售自己教给你的知识（未经公司核实）：\n" + facts)
     if history:
         parts.append("此前对话：\n" + "\n".join(f"{'销售' if h['role'] == 'user' else '助手'}：{_clip(h['text'], 200)}" for h in history[-6:]))
     parts.append("销售现在说：" + question)
@@ -419,8 +434,9 @@ class Run:
 
     def run(self, question: str, store: Store | None, history: list[dict], focus: bool = True, summary: str = "", last_search: dict | None = None) -> dict:
         self.question = question
+        said, facts = memory.relevant(self.db, self.user, question)
         base = build_user_message(self.db, self.user, question, store, history, self.shown,
-                                  memory=memory.relevant_text(self.db, self.user, question), summary=summary, last_search=last_search, focus=focus,
+                                  memory=said, facts=facts, summary=summary, last_search=last_search, focus=focus,
                                   has_location=self.location is not None)
         transcript = ""
         self.emit({"type": "status", "text": "思考中…"})

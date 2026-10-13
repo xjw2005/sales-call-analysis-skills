@@ -1015,3 +1015,41 @@ test('拜访卡片：待确认费用、处理失败、无效录音直接写出�
   assert.ok(hint({ status: 'invalid_short' }).includes('重新判定'));
   assert.strictEqual(hint({ status: 'done' }), '');
 });
+
+// ---------- 助手记忆：分组显示、教一条知识 ----------
+function memoryPage(items) {
+  const added = [];
+  const env = mountPage('pages/memory/index.js', {
+    stubs: {
+      'services/memory.js': {
+        listMemories: async () => ({ items }), addMemory: async (d) => { added.push(d); }, confirmMemory: async () => true,
+        updateMemory: async () => true, deleteMemory: async () => true, shareMemory: async () => true,
+      },
+    },
+  });
+  return { ...env, added };
+}
+
+test('助手记忆页：按「你教我的知识 / 说法 / 习惯和纠正」分组，知识组说明未经公司核实', async () => {
+  const { page } = memoryPage([
+    { id: 1, kind: 'alias', key: '城东', text: '「城东」指 官渡区', status: 'active', mine: true },
+    { id: 2, kind: 'fact', key: 'a2', text: '关于「a2」：xx', status: 'active', mine: true },
+    { id: 3, kind: 'preference', key: '', text: '回答简短', status: 'active', mine: true },
+    { id: 4, kind: 'fact', key: '紫白金', text: '关于「紫白金」：yy', status: 'pending', mine: true },
+  ]);
+  await page.load();
+  assert.deepStrictEqual(page.data.groups.map((g) => [g.kind, g.items.map((m) => m.id)]), [['fact', [2]], ['alias', [1]], ['habit', [3]]]);
+  assert.ok(page.data.groups[0].note.includes('没有经过公司核实'));
+  assert.deepStrictEqual(page.data.pending.map((m) => m.id), [4]);
+  assert.strictEqual(page.data.empty, false);
+});
+
+test('助手记忆页：手动教一条知识，先问主题词再问内容', async () => {
+  const { page, added } = memoryPage([]);
+  global.wx.showActionSheet = (o) => o.success({ tapIndex: 0 });
+  const answers = ['紫白金', '紫白金下月起换新包装'];
+  global.wx.showModal = (o) => o.success({ confirm: true, content: answers.shift() });
+  page.add();
+  await tick();
+  assert.deepStrictEqual(added, [{ kind: 'fact', key: '紫白金', value: '紫白金下月起换新包装' }]);
+});
