@@ -7,7 +7,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -18,7 +18,7 @@ from ..ai import worker
 from ..config import get_settings
 from ..db import SessionLocal
 from ..ai.limits import Rejected, limiter
-from ..models import ChatLog, ChatMessage, ChatSession, PracticeSession, User, utcnow
+from ..models import ChatLog, ChatMessage, ChatSession, PracticeSession, User, UserMemory, utcnow
 from ..services.timeutil import to_ms
 from ..services.access import visible_store
 from ..services.assistant import brief, today_panel
@@ -152,8 +152,7 @@ def clear_chat_sessions(db: Session = Depends(get_db), user: User = Depends(curr
     """清空我的全部对话（只删自己的）。返回删除了几段"""
     ids = list(db.scalars(select(ChatSession.id).where(ChatSession.user_id == user.id)))
     if ids:
-        db.execute(delete(ChatMessage).where(ChatMessage.session_id.in_(ids)))
-        db.execute(delete(ChatSession).where(ChatSession.id.in_(ids)))
+        _drop_sessions(db, ids)
         db.commit()
     return {"deleted": len(ids)}
 
@@ -171,10 +170,17 @@ def delete_chat_session(session_id: int, db: Session = Depends(get_db), user: Us
     sess = db.get(ChatSession, session_id)
     if sess is None or sess.user_id != user.id:
         raise HTTPException(status_code=404, detail="对话不存在")
-    db.execute(delete(ChatMessage).where(ChatMessage.session_id == sess.id))
-    db.delete(sess)
+    _drop_sessions(db, [sess.id])
     db.commit()
     return True
+
+
+def _drop_sessions(db: Session, ids: list[int]) -> None:
+    """删对话：先让记忆和这些对话解绑（记忆属于人，不属于某段对话，要保留），再删消息和对话。
+    不解绑的话 MySQL 外键会拦住删除（线上「请求失败 500」）"""
+    db.execute(update(UserMemory).where(UserMemory.session_id.in_(ids)).values(session_id=None))
+    db.execute(delete(ChatMessage).where(ChatMessage.session_id.in_(ids)))
+    db.execute(delete(ChatSession).where(ChatSession.id.in_(ids)))
 
 
 @router.post("/chat/feedback")

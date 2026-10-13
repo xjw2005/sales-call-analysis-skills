@@ -140,3 +140,25 @@ def test_session_state_summary_and_store_focus(client, auth, monkeypatch):
     scripted(monkeypatch, [{"action": "answer", "reply": "好", "suggestions": []}], seen)
     chat(client, auth, "接着说", sessionId=sid)
     assert "更早对话的摘要：\n销售在看渝中区" in seen[0] and "第19句" in seen[0] and "第0句" not in seen[0]
+
+
+def test_deleting_chat_that_proposed_a_memory_keeps_the_memory(client):
+    """线上 500 的复现：对话里助手提议过记忆（记忆记着来源对话），删这段对话 / 清空对话不能报错，记忆保留"""
+    from app.db import SessionLocal
+    from app.models import ChatSession, UserMemory
+
+    from .conftest import login_user
+
+    h, u = login_user(client)
+    with SessionLocal() as db:
+        s1, s2 = ChatSession(user_id=int(u["id"]), title="一"), ChatSession(user_id=int(u["id"]), title="二")
+        db.add_all([s1, s2])
+        db.flush()
+        db.add_all([UserMemory(user_id=int(u["id"]), kind="alias", key="城东", value=["官渡区"], status="active", session_id=s1.id),
+                    UserMemory(user_id=int(u["id"]), kind="alias", key="城西", value=["西山区"], status="pending", session_id=s2.id)])
+        db.commit()
+        ids = (s1.id, s2.id)
+    assert client.delete(f"/chat/sessions/{ids[0]}", headers=h).status_code == 200
+    assert client.delete("/chat/sessions", headers=h).json() == {"deleted": 1}
+    with SessionLocal() as db:
+        assert sorted((m.key, m.session_id) for m in db.query(UserMemory)) == [("城东", None), ("城西", None)]
