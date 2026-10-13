@@ -67,7 +67,7 @@ B) 把最近一次 search_stores 找到的门店以卡片展示给销售（销�
 
 C) 其他问题（销售话术、异议怎么回、某家店的情况、下一步做什么），或查询之后的文字回答：
 {"action":"answer","reply":"回答正文","suggestions":["最多3个可以接着问的短问题"]}
-- 只能依据「门店资料」「参考知识」「公司知识库」「销售自己教给你的知识」和工具结果回答，没有的事实不要编造，直接说“目前资料里没有”；
+- 只能依据「门店资料」「公司知识库」「销售自己教给你的知识」和工具结果回答，没有的事实不要编造，直接说“目前资料里没有”；
 - 来源优先级：公司知识库 > 销售自己教给你的知识。用到「销售自己教给你的知识」时要说明来源，例如“你之前告诉我……（这条没有经过公司核实）”；
   两者矛盾时以公司知识库为准，并提醒销售「你之前说的和公司资料不一致」，建议他找品牌方确认后在「我的 → 助手记住了什么」里改掉；
 - 产品、品牌、政策类问题，公司知识库和销售教的都没有时，直接说“目前资料里没有”，可以建议他问品牌方，或告诉你后让你记下；
@@ -82,6 +82,18 @@ C) 其他问题（销售话术、异议怎么回、某家店的情况、下一�
 """
 
 LIMIT_CHARS = 6000
+
+
+def system_prompt() -> str:
+    """系统提示词 = 固定规则 + 公司知识库全部已审定资料。
+    两部分只随代码和知识库文件变化、每次提问都一样，放在最前面，模型服务对重复的开头有缓存折扣"""
+    core.init_knowledge()
+    company = kb.full_block()
+    if not company:
+        return SYSTEM
+    return (SYSTEM + "\n\n# 公司知识库（全部已审定资料，公司标准说法，优先级最高）\n"
+            "产品、品牌、公司、政策、法规类问题以这里为准；这里没有的就说“目前资料里没有”。不得据此编造某家门店的情况。"
+            "需要时在回答里自然地讲出来，不要输出「知识#编号」这类标记。\n\n" + company)
 
 
 def _clip(text: str, n: int) -> str:
@@ -206,16 +218,9 @@ def build_user_message(db: Session, user: User, question: str, store: Store | No
         parts.append("刚才给销售看的门店（按顺序）：\n" + "\n".join(f"{i}. {x.name}" for i, x in enumerate(shown, 1)))
     plan = plans.today_items(db, user)
     parts.append("今日计划：" + ("；".join(f"{p['name']}（{'已去' if p['status'] == 'visited' else '待去'}）" for p in plan) if plan else "还没有"))
-    core.init_knowledge()
-    know = "\n\n".join(b for b in (kb.knowledge_block_for("concerns"), kb.knowledge_block_for("next-action")) if b)
+    # 公司知识库整份放在系统提示词里（见 system_prompt），这里不再重复
     objections = "\n".join(f"- 客户说「{o['says']}」：{'；'.join(o['points'])}。参考话术：{o['script']}" for o in OBJECTIONS.values())
     parts.append("参考话术库：\n" + objections)
-    if know:
-        parts.append("参考知识（只用于理解和归类，不得据此编造门店事实）：\n" + _clip(know, 3000))
-    # 公司知识库里和这句话相关的条目（产品、公司、政策……）：这是公司的标准说法
-    company = kb.relevant_block(question)
-    if company:
-        parts.append("公司知识库里和这个问题相关的资料（公司标准说法，优先级最高）：\n" + _clip(company, 2500))
     if facts:
         parts.append("销售自己教给你的知识（未经公司核实）：\n" + facts)
     if history:
@@ -434,6 +439,7 @@ class Run:
 
     def run(self, question: str, store: Store | None, history: list[dict], focus: bool = True, summary: str = "", last_search: dict | None = None) -> dict:
         self.question = question
+        system = system_prompt()
         said, facts = memory.relevant(self.db, self.user, question)
         base = build_user_message(self.db, self.user, question, store, history, self.shown,
                                   memory=said, facts=facts, summary=summary, last_search=last_search, focus=focus,
@@ -441,7 +447,7 @@ class Run:
         transcript = ""
         self.emit({"type": "status", "text": "思考中…"})
         for step in range(MAX_TOOL_ROUNDS + 1):
-            text = self.llm(SYSTEM, base + transcript)
+            text = self.llm(system, base + transcript)
             try:
                 out = parse_reply(text)
             except (ValueError, json.JSONDecodeError):

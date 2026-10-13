@@ -194,7 +194,8 @@ def test_fact_cannot_be_shared_to_team(client, monkeypatch):
     assert r.status_code == 400 and "公司知识库" in r.json()["message"]
 
 
-def test_company_knowledge_relevant_to_question_is_in_prompt(client, auth, monkeypatch):
+def test_full_approved_knowledge_is_in_system_prompt_for_every_question(client, auth, monkeypatch):
+    """公司知识库全部已审定资料每次都在系统提示词里（问法再怪也不会漏）；草稿不带；不在每轮的用户消息里重复"""
     from pathlib import Path
 
     from app.ai import knowledge as kb
@@ -202,11 +203,19 @@ def test_company_knowledge_relevant_to_question_is_in_prompt(client, auth, monke
     root = Path(__file__).resolve().parents[1] / "knowledge" / "a2"
     monkeypatch.setattr(core, "init_knowledge", lambda: kb.configure(root=root, enabled=True, mode="manifest"))
     seen = []
-    scripted(monkeypatch, [{"action": "answer", "reply": "好", "suggestions": []}], seen)
-    chat(client, auth, "A2是什么旗下的")
-    assert "公司知识库里和这个问题相关的资料" in seen[0] and "品牌背景" in seen[0]
-    seen.clear()
-    scripted(monkeypatch, [{"action": "answer", "reply": "好", "suggestions": []}], seen)
+
+    def fake(system, user, model, temperature):
+        seen.append((system, user))
+        return json.dumps({"action": "answer", "reply": "好", "suggestions": []}, ensure_ascii=False), {}
+
+    monkeypatch.setattr(core, "call_llm", fake)
+    chat(client, auth, "这奶粉是哪国的")
     chat(client, auth, "城东有哪些店")
-    assert "公司知识库里和这个问题相关的资料" not in seen[0]
+    (sys1, user1), (sys2, _) = seen
+    assert sys1 == sys2  # 每次一样，模型服务才能对重复的开头打折
+    assert "# 公司知识库（全部已审定资料" in sys1 and "品牌背景与 A2 型蛋白介绍" in sys1 and "紫白金核心卖点" in sys1
+    base = kb.load_knowledge_base(root)
+    drafts = [e for e in base.entries if e.status != "active"]
+    assert drafts and all(f"知识#{e.id} " not in sys1 for e in drafts)
+    assert "品牌背景" not in user1
     kb.configure(root=None, enabled=False, mode="manifest")
