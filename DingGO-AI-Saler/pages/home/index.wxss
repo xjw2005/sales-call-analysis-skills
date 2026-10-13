@@ -112,6 +112,7 @@
 .pc-icon { width: 80rpx; height: 80rpx; border-radius: 24rpx; background: #5b55e8; color: #fff; font-weight: 700; text-align: center; line-height: 80rpx; flex-shrink: 0; }
 .pc-body { flex: 1; }
 .pc-title { font-size: 30rpx; font-weight: 600; margin-bottom: 4rpx; }
+.feature { justify-content: space-between; padding: 26rpx 8rpx; font-size: 29rpx; border-bottom: 2rpx solid #f1f2f8; }
 .drawer-store { padding: 16rpx 0; font-size: 30rpx; gap: 16rpx; }
 .pill-avatar.small { width: 56rpx; height: 56rpx; line-height: 56rpx; background: #eeedfd; color: #5b55e8; margin-right: 0; }
 .cur { margin-left: auto; }
@@ -129,7 +130,7 @@
 .check { flex-shrink: 0; width: 40rpx; height: 40rpx; border-radius: 12rpx; border: 2rpx solid #cfcdfa; text-align: center; line-height: 36rpx; font-size: 26rpx; color: #fff; margin-top: 4rpx; box-sizing: border-box; }
 .check.on { background: #5b55e8; border-color: #5b55e8; }
 .cand-addr { font-size: 22rpx; margin-top: 2rpx; }
-.prow-col { display: flex; flex-direction: column; gap: 12rpx; align-items: flex-end; }
+.prow-acts { gap: 12rpx; flex-shrink: 0; }
 .prow-btn.solid { background: #5b55e8; color: #fff; border-color: #5b55e8; }
 
 /* 流式回答：进度行与反馈 */

@@ -14,9 +14,9 @@
           <text class="tag info">待去</text>
         </view>
         <view wx:if="{{item.reason || item.district}}" class="action">{{item.reason || item.district}}</view>
-        <view class="btns row">
-          <view class="fb fb-more" data-id="{{item.id}}" data-name="{{item.name}}" data-store="{{item.storeId}}" bindtap="morePlan">···</view>
-          <view class="fb-primary" data-store="{{item.storeId}}" bindtap="recordStore">到店录音</view>
+        <view class="acts">
+          <view class="act-more" data-id="{{item.id}}" data-name="{{item.name}}" data-store="{{item.storeId}}" bindtap="morePlan">···</view>
+          <view class="act-btn primary" data-store="{{item.storeId}}" bindtap="recordStore">到店录音</view>
         </view>
       </view>
     </block>
@@ -38,9 +38,9 @@
         </view>
         <view wx:if="{{item.acceptance}}" class="faint">验收：{{item.acceptance}}</view>
         <view wx:if="{{item.assigneeName && item.source === 'manager'}}" class="faint">上级指派</view>
-        <view class="btns row">
-          <view class="fb fb-more" data-id="{{item.id}}" data-topic="{{item.topic}}" bindtap="moreTodo">···</view>
-          <view class="fb-primary" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">标记完成</view>
+        <view class="acts">
+          <view class="act-more" data-id="{{item.id}}" data-topic="{{item.topic}}" bindtap="moreTodo">···</view>
+          <view class="act-btn primary" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">标记完成</view>
         </view>
       </view>
     </block>
@@ -53,7 +53,7 @@
           <text class="tag warn">待确认</text>
         </view>
         <view class="action">{{item.timeText}} · 录音 {{item.durText}}，预估识别费 ¥{{item.estCost}}，确认后自动分析</view>
-        <view class="btns row"><view class="fb-primary" data-id="{{item.id}}" bindtap="openVisit">去确认</view></view>
+        <view class="acts"><view class="act-btn primary" data-id="{{item.id}}" bindtap="openVisit">去确认</view></view>
       </view>
     </block>
 
@@ -69,7 +69,7 @@
           <text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.name}} ›</text>
           <text class="tag success">已去</text>
         </view>
-        <view class="btns row"><view class="fb" data-id="{{item.visitId}}" bindtap="openVisit">看拜访</view></view>
+        <view class="acts"><view class="act-btn" data-id="{{item.visitId}}" bindtap="openVisit">看拜访</view></view>
       </view>
     </block>
     <block wx:if="{{done.length}}">
@@ -78,7 +78,7 @@
         <view class="row between"><text class="store" data-id="{{item.storeId}}" bindtap="openStore">{{item.storeName}}{{item.storeId ? ' ›' : ''}}</text></view>
         <view class="topic">{{item.topic}}</view>
         <view wx:if="{{item.action}}" class="action">{{item.action}}</view>
-        <view class="btns row"><view class="fb" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">撤销完成</view></view>
+        <view class="acts"><view class="act-btn" data-id="{{item.id}}" data-done="{{item.done}}" bindtap="toggle">撤销完成</view></view>
       </view>
     </block>
     <empty-state wx:if="{{loaded && !doneCount}}" compact title="还没有完成的事项" />

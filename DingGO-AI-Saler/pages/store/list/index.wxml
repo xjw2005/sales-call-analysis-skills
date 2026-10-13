@@ -1,9 +1,14 @@
 <view class="page">
   <!-- 空状态（对应「暂无就诊人」） -->
-  <empty-state wx:if="{{loaded && !stores.length}}" title="暂无门店" desc="添加你负责的门店，可为其录音拜访、生成门店档案和跟进行动。" />
+  <empty-state wx:if="{{loaded && !stores.length}}" title="暂无门店" desc="添加你负责的门店，可为其录音拜访、生成门店档案和跟进行动。">
+    <view class="btn-ghost empty-add" bindtap="addStore">添加门店</view>
+  </empty-state>
 
   <view wx:else class="container">
-    <view class="search row"><text class="faint">🔍</text><input class="search-input" placeholder="搜索门店名称或地址" placeholder-class="ph" bindinput="onSearch" /><view class="filter-btn {{activeCount ? 'on' : ''}}" bindtap="toggleFilter">筛选{{activeCount ? ' · ' + activeCount : ''}}</view></view>
+    <view class="list-bar">
+      <view class="list-search"><text class="faint">🔍</text><input placeholder="搜索门店名称或地址" placeholder-class="ph" bindinput="onSearch" /><view class="filter-btn {{activeCount ? 'on' : ''}}" bindtap="toggleFilter">筛选{{activeCount ? ' · ' + activeCount : ''}}</view></view>
+      <view class="list-action" bindtap="addStore">+ 门店</view>
+    </view>
     <view wx:if="{{filterOpen}}" class="card filters">
       <view class="f-title">合作状态</view>
       <view class="chips"><view wx:for="{{coopOpts}}" wx:key="*this" class="chip {{coop === item ? 'sel' : ''}}" data-v="{{item}}" bindtap="pickCoop">{{item}}</view></view>
@@ -29,10 +34,6 @@
     <view wx:elif="{{rows.length < shown.length}}" class="faint none">上拉加载更多（已显示 {{rows.length}} / {{shown.length}}）</view>
   </view>
 
-  <view style="height:140rpx"></view>
   <view class="tab-safe"></view>
-  <view class="add-bar">
-    <view class="btn-primary" bindtap="addStore">添加门店</view>
-  </view>
 </view>
-<back-top show="{{showTop}}" offset="{{300}}" />
+<back-top show="{{showTop}}" />

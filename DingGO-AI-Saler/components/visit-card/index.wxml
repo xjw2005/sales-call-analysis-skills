@@ -8,6 +8,7 @@
     <text wx:if="{{legacy}}" class="tag info">历史记录</text>
     <text class="faint">{{time}}{{noRecording ? ' · 无录音' : ' · 录音 ' + dur}}</text>
   </view>
+  <view wx:if="{{todo}}" class="todo-hint">{{todo}}</view>
   <view wx:if="{{summary}}" class="summary">{{summary}}</view>
   <view wx:elif="{{noteBrief}}" class="summary">速记：{{noteBrief}}</view>
   <view wx:if="{{grade}}" class="score row">

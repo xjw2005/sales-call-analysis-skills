@@ -63,3 +63,16 @@ page {
 .pill-add { width: 80rpx; height: 80rpx; border-radius: 50%; background: rgba(255,255,255,0.85); color: var(--text); text-align: center; line-height: 76rpx; font-size: 44rpx; margin-left: 20rpx; }
 
 .tab-safe { height: calc(180rpx + env(safe-area-inset-bottom)); }
+
+/* 卡片底部操作行（全站统一）：左边「···」放次要操作，右边一个主按钮，最多再加一个次按钮 */
+.acts { display: flex; justify-content: flex-end; align-items: center; gap: 16rpx; margin-top: 20rpx; }
+.act-btn { padding: 12rpx 28rpx; border-radius: 999rpx; border: 2rpx solid #e1e2ec; font-size: 26rpx; color: #4a4d6b; line-height: 1.4; }
+.act-btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.act-more { margin-right: auto; padding: 4rpx 28rpx 16rpx; border-radius: 999rpx; border: 2rpx solid #e1e2ec; color: #4a4d6b; font-size: 30rpx; font-weight: 700; letter-spacing: 2rpx; line-height: 1; }
+
+/* 列表页顶栏（门店、拜访共用）：搜索框 + 右侧一个动作 */
+.list-bar { display: flex; align-items: center; gap: 16rpx; margin: 16rpx 0 20rpx; }
+.list-search { flex: 1; display: flex; align-items: center; background: #fff; border-radius: 999rpx; height: 80rpx; padding: 0 28rpx; min-width: 0; }
+.list-search input { flex: 1; margin-left: 12rpx; font-size: 28rpx; }
+.list-search .ph { color: var(--text-3); }
+.list-action { flex-shrink: 0; height: 80rpx; line-height: 80rpx; padding: 0 28rpx; border-radius: 999rpx; background: var(--primary); color: #fff; font-size: 28rpx; font-weight: 500; }

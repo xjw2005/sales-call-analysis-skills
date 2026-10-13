@@ -10,8 +10,11 @@ const FILTERS = [
   { text: '无效', match: (v) => ['invalid_short', 'invalid_content', 'failed'].includes(v.status) },
 ];
 
+// 搜索：门店名、现场速记、拜访阶段、无录音原因里包含关键词就算
+const hit = (v, k) => [v.storeName, v.note, v.stage, v.noRecordingReason].some((s) => (s || '').includes(k));
+
 Page({
-  data: { filters: FILTERS.map((f) => f.text), active: 0, all: [], shown: [], showTop: false },
+  data: { filters: FILTERS.map((f) => f.text), active: 0, all: [], shown: [], counts: [], keyword: '', loaded: false, showTop: false },
   onPageScroll(e) {
     trackScroll(this, e.scrollTop);
   },
@@ -25,9 +28,10 @@ Page({
   async load() {
     try {
       const all = await listVisits();
-      this.setData({ all });
+      this.setData({ all, loaded: true });
       this.apply();
     } catch (err) {
+      this.setData({ loaded: true });
       wx.showToast({ title: err.message, icon: 'none' });
     }
   },
@@ -35,8 +39,16 @@ Page({
     this.setData({ active: Number(e.currentTarget.dataset.i) });
     this.apply();
   },
+  onSearch(e) {
+    this.setData({ keyword: e.detail.value });
+    this.apply();
+  },
   apply() {
-    this.setData({ shown: this.data.all.filter(FILTERS[this.data.active].match) });
+    const k = this.data.keyword.trim();
+    const found = k ? this.data.all.filter((v) => hit(v, k)) : this.data.all;
+    // 「待确认」这类需要处理的，在筛选标签上直接显示条数（全部不显示，避免数字太多）
+    const counts = FILTERS.map((f, i) => (i === 1 || i === 2 ? found.filter(f.match).length : 0));
+    this.setData({ shown: found.filter(FILTERS[this.data.active].match), counts });
   },
   record() {
     wx.navigateTo({ url: '/pages/record/index' });

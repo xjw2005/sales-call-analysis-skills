@@ -1,11 +1,16 @@
 <view class="container">
+  <view class="list-bar">
+    <view class="list-search"><text class="faint">🔍</text><input placeholder="搜索门店、速记、拜访阶段" placeholder-class="ph" bindinput="onSearch" /></view>
+    <view class="list-action" bindtap="record">● 录音</view>
+  </view>
   <scroll-view scroll-x class="chips" enhanced show-scrollbar="{{false}}">
-    <view wx:for="{{filters}}" wx:key="*this" class="chip {{active === index ? 'on' : ''}}" data-i="{{index}}" bindtap="pick">{{item}}</view>
+    <view wx:for="{{filters}}" wx:key="*this" class="chip {{active === index ? 'on' : ''}}" data-i="{{index}}" bindtap="pick">{{item}}{{counts[index] ? ' ' + counts[index] : ''}}</view>
   </scroll-view>
   <visit-card wx:for="{{shown}}" wx:key="id" visit="{{item}}" />
-  <empty-state wx:if="{{!shown.length}}" compact title="暂无拜访录音" desc="录音即享四大分析：需求洞察、关心点、话术评分、门店档案">
+  <empty-state wx:if="{{loaded && !all.length}}" compact title="暂无拜访录音" desc="录音即享四大分析：需求洞察、关心点、话术评分、门店档案">
     <view class="btn-ghost start" bindtap="record">开始第一次拜访</view>
   </empty-state>
+  <view wx:elif="{{loaded && !shown.length}}" class="faint none">没有符合条件的拜访</view>
   <view class="tab-safe"></view>
 </view>
 <back-top show="{{showTop}}" />

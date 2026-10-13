@@ -444,3 +444,46 @@ test('陪练中打开历史对话：陪练条消失', async () => {
   assert.strictEqual(page.data.practice, null);
   assert.deepStrictEqual(texts(page), ['问1', '答1']);
 });
+
+// ---------- V2：入口去重、计划卡片「···」、抽屉功能入口 ----------
+const sheetPick = (label) => { global.wx.showActionSheet = (o) => { sheetPick.items = o.itemList; o.success({ tapIndex: o.itemList.indexOf(label) }); }; };
+
+test('首页「+」：不再重复「新对话」；有当前门店时可进简报和门店详情，没有门店时可添加门店', async () => {
+  const { page, log } = home();
+  page.setData({ currentStore: { id: 's1', name: '甲店' } });
+  sheetPick('当前门店的进店简报');
+  await page.moreActions();
+  assert.ok(!sheetPick.items.includes('新对话'));
+  sheetPick('当前门店详情');
+  await page.moreActions();
+  page.setData({ currentStore: null });
+  sheetPick('添加门店');
+  await page.moreActions();
+  assert.deepStrictEqual(log.navigations, ['navigateTo:/pages/brief/index?storeId=s1', 'navigateTo:/pages/store/detail/index?id=s1', 'navigateTo:/pages/store/edit/index']);
+});
+
+test('首页今日计划：每家店一个主按钮，「···」里看简报、门店详情、移出计划；已去的店不能移出', async () => {
+  const removed = [];
+  const { page, log } = home({ plan: { removePlan: async (id) => { removed.push(id); return true; } } });
+  const ev = (o) => ({ currentTarget: { dataset: { id: 'p1', store: 's1', plan: 'm1', ...o } } });
+  sheetPick('进店简报');
+  await page.planMore(ev({ visited: false }));
+  sheetPick('门店详情');
+  await page.planMore(ev({ visited: false }));
+  sheetPick('移出今日计划');
+  await page.planMore(ev({ visited: false }));
+  assert.deepStrictEqual(removed, ['p1']);
+  sheetPick('进店简报');
+  await page.planMore(ev({ visited: true }));
+  assert.ok(!sheetPick.items.includes('移出今日计划'));
+  assert.deepStrictEqual(log.navigations, ['navigateTo:/pages/brief/index?storeId=s1', 'navigateTo:/pages/store/detail/index?id=s1', 'navigateTo:/pages/brief/index?storeId=s1']);
+});
+
+test('首页抽屉：功能入口点了先收起抽屉再跳转', () => {
+  const { page, log, tabBar } = home();
+  page.toggleDrawer();
+  page.openFeature({ currentTarget: { dataset: { url: '/pages/todo/index' } } });
+  assert.strictEqual(page.data.drawerOpen, false);
+  assert.strictEqual(tabBar.data.hidden, false);
+  assert.deepStrictEqual(log.navigations, ['navigateTo:/pages/todo/index']);
+});

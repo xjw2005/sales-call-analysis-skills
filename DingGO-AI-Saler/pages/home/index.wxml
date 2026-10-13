@@ -131,11 +131,11 @@
                   <view class="prow-text">
                     <view class="prow-title">{{p.name}}</view>
                     <view class="prow-sub">{{p.reason || p.district}}</view>
-                    <view wx:if="{{p.status !== 'visited'}}" class="prow-link" data-action="remove" data-id="{{p.id}}" data-plan="{{msg.id}}" bindtap="onPlanAction">移出计划</view>
                   </view>
-                  <view class="prow-col">
-                    <view class="prow-btn" data-action="brief" data-store="{{p.storeId}}" bindtap="onPlanAction">简报</view>
+                  <view class="row prow-acts">
+                    <view class="prow-btn" data-id="{{p.id}}" data-store="{{p.storeId}}" data-plan="{{msg.id}}" data-visited="{{p.status === 'visited'}}" data-visit="{{p.visitId}}" bindtap="planMore">···</view>
                     <view wx:if="{{p.status !== 'visited'}}" class="prow-btn solid" data-action="record" data-store="{{p.storeId}}" bindtap="onPlanAction">到店录音</view>
+                    <view wx:else class="prow-btn" data-action="visit" data-id="{{p.visitId}}" bindtap="onPlanAction">看拜访</view>
                   </view>
                 </view>
               </view>
@@ -273,6 +273,9 @@
       </view>
       <text class="faint">›</text>
     </view>
+    <view class="feature row" data-url="/pages/todo/index" bindtap="openFeature"><text>我的待办</text><text class="faint">›</text></view>
+    <view class="feature row" data-url="/pages/objection/index" bindtap="openFeature"><text>常见异议与应对话术</text><text class="faint">›</text></view>
+    <view wx:if="{{!isMock}}" class="feature row" data-url="/pages/memory/index" bindtap="openFeature"><text>助手记住了什么</text><text class="faint">›</text></view>
     <view class="drawer-title row between">
       <text>对话记录</text>
       <text wx:if="{{histories.length}}" class="dc-clear" bindtap="clearHistories">清空</text>

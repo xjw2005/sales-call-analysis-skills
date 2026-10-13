@@ -50,6 +50,7 @@ Page({
     practice: null, // 陪练进行中：{ sessionId, scenarioId, title, round, total }
     drawerOpen: false,
     histories: [],
+    isMock: !!config.useMock, // 演示模式没有「助手记住了什么」
   },
 
   onLoad() {
@@ -245,6 +246,20 @@ Page({
         wx.showToast({ title: err.message, icon: 'none' });
       }
     }
+    return undefined;
+  },
+
+  // 计划里每家店的「···」：简报、门店详情、移出计划（已去的店不能移出）
+  sheet(itemList) {
+    return new Promise((resolve) => wx.showActionSheet({ itemList, success: (r) => resolve(itemList[r.tapIndex]), fail: () => resolve('') }));
+  },
+  async planMore(e) {
+    const { id, store, plan, visited } = e.currentTarget.dataset;
+    const pick = await this.sheet(visited ? ['进店简报', '门店详情'] : ['进店简报', '门店详情', '移出今日计划']);
+    const as = (action) => ({ currentTarget: { dataset: { action, id, store, plan } } });
+    if (pick === '进店简报') return this.onPlanAction(as('brief'));
+    if (pick === '门店详情') return this.go(`/pages/store/detail/index?id=${store}`);
+    if (pick === '移出今日计划') return this.onPlanAction(as('remove'));
     return undefined;
   },
 
@@ -502,16 +517,22 @@ Page({
     const sid = this.storeId();
     this.go(`/pages/record/index${sid ? `?storeId=${sid}` : ''}`);
   },
-  moreActions() {
-    wx.showActionSheet({
-      itemList: ['从聊天记录导入录音', '查看当前门店档案', '新对话'],
-      success: ({ tapIndex }) => {
-        const sid = this.storeId();
-        if (tapIndex === 0) this.go(`/pages/record/index?mode=import${sid ? `&storeId=${sid}` : ''}`);
-        if (tapIndex === 1 && sid) this.go(`/pages/store/detail/index?id=${sid}`);
-        if (tapIndex === 2) this.newChat();
-      },
-    });
+  // 输入框右边的「+」：和当前门店相关的操作（「新对话」在右上角，这里不重复）
+  async moreActions() {
+    const sid = this.storeId();
+    const items = sid ? ['从聊天记录导入录音', '当前门店的进店简报', '当前门店详情'] : ['从聊天记录导入录音', '添加门店'];
+    const pick = await this.sheet(items);
+    if (pick === '从聊天记录导入录音') return this.go(`/pages/record/index?mode=import${sid ? `&storeId=${sid}` : ''}`);
+    if (pick === '当前门店的进店简报') return this.go(`/pages/brief/index?storeId=${sid}`);
+    if (pick === '当前门店详情') return this.go(`/pages/store/detail/index?id=${sid}`);
+    if (pick === '添加门店') return this.addStore();
+    return undefined;
+  },
+  // 抽屉里的功能入口
+  openFeature(e) {
+    const url = e.currentTarget.dataset.url;
+    this.toggleDrawer();
+    this.go(url);
   },
 
   // ---- 抽屉：打开时隐藏自定义标签栏，避免它浮在抽屉之上 ----

@@ -440,7 +440,7 @@ test('回到顶部：滚过一屏才显示；只在跨过阈值时刷新页面�
 });
 
 test('回到顶部：长列表页（拜访、门店、选择门店）都接上了滚动监听和按钮', () => {
-  [['pages/visit/list', null], ['pages/store/list', 300], ['pages/store/pick', 48]].forEach(([dir, offset]) => {
+  [['pages/visit/list', null], ['pages/store/list', null], ['pages/store/pick', 48]].forEach(([dir, offset]) => {
     const js = fs.readFileSync(path.join(ROOT, dir, 'index.js'), 'utf8');
     const wxml = fs.readFileSync(path.join(ROOT, dir, 'index.wxml'), 'utf8');
     assert.ok(js.includes('onPageScroll') && js.includes('showTop'), `${dir} 缺少滚动监听`);
@@ -961,4 +961,57 @@ test('演示模式：删除的待办不再出现在列表里（记在本机）',
   assert.ok(!after.some((t) => t.id === victim));
   assert.strictEqual(after.length, before.length - 1);
   assert.ok(log.storage.todoCancelled.includes(victim));
+});
+
+// ---------- V2：拜访列表搜索、门店列表顶栏 ----------
+test('拜访列表：按门店名 / 速记 / 阶段搜索，和状态筛选叠加；待确认、处理中显示条数', async () => {
+  const visits = [
+    { id: '1', storeName: '宝贝乐', status: 'cost_pending', stage: '首访破冰', note: '' },
+    { id: '2', storeName: '张记', status: 'done', stage: '日常维护', note: '老板说要宝贝乐同款' },
+    { id: '3', storeName: '童趣', status: 'analyzing', stage: '日常维护', note: '' },
+  ];
+  const { page, log } = mountPage('pages/visit/list/index.js', { stubs: { 'services/visit.js': { listVisits: async () => visits } } });
+  await page.onShow();
+  await tick();
+  assert.deepStrictEqual(page.data.counts, [0, 1, 1, 0, 0]);
+  page.onSearch({ detail: { value: '宝贝乐' } });
+  assert.deepStrictEqual(page.data.shown.map((v) => v.id), ['1', '2']); // 速记里提到也算
+  page.pick({ currentTarget: { dataset: { i: 3 } } });
+  assert.deepStrictEqual(page.data.shown.map((v) => v.id), ['2']);
+  page.onSearch({ detail: { value: '日常' } });
+  page.pick({ currentTarget: { dataset: { i: 0 } } });
+  assert.deepStrictEqual(page.data.shown.map((v) => v.id), ['2', '3']);
+  page.record();
+  assert.deepStrictEqual(log.navigations, ['navigateTo:/pages/record/index']);
+});
+
+test('门店 / 拜访列表：新增入口在顶栏，不再用遮挡列表的底部大按钮', () => {
+  const store = fs.readFileSync(path.join(ROOT, 'pages/store/list/index.wxml'), 'utf8');
+  const visit = fs.readFileSync(path.join(ROOT, 'pages/visit/list/index.wxml'), 'utf8');
+  assert.ok(store.includes('class="list-action" bindtap="addStore"') && !store.includes('add-bar'));
+  assert.ok(visit.includes('class="list-action" bindtap="record"'));
+});
+
+test('卡片操作样式统一：待办页用全站的 acts / act-btn / act-more，不再有页面私有按钮样式', () => {
+  const wxml = fs.readFileSync(path.join(ROOT, 'pages/todo/index.wxml'), 'utf8');
+  const wxss = fs.readFileSync(path.join(ROOT, 'pages/todo/index.wxss'), 'utf8');
+  const app = fs.readFileSync(path.join(ROOT, 'app.wxss'), 'utf8');
+  assert.ok(wxml.includes('class="acts"') && wxml.includes('class="act-more"') && !/class="fb/.test(wxml));
+  assert.ok(!/\.fb|\.btns/.test(wxss));
+  assert.ok(app.includes('.act-btn') && app.includes('.list-bar'));
+});
+
+test('拜访卡片：待确认费用、处理失败、无效录音直接写出「要你做什么」，其他状态不写', () => {
+  mountPage('pages/me/index.js', { stubs: {} });
+  let def;
+  global.Component = (d) => { def = d; };
+  const file = require.resolve(path.join(ROOT, 'components/visit-card/index.js'));
+  delete require.cache[file];
+  require(file);
+  const hint = (v) => { const c = { data: {}, setData(p) { Object.assign(this.data, p); } }; def.observers.visit.call(c, { createdAt: 0, ...v }); return c.data.todo; };
+  assert.ok(hint({ status: 'cost_pending', estCost: 0.32 }).includes('¥0.32'));
+  assert.strictEqual(hint({ status: 'cost_pending', legacy: true }), ''); // 历史导入的录音不能确认
+  assert.ok(hint({ status: 'failed' }).includes('重新处理'));
+  assert.ok(hint({ status: 'invalid_short' }).includes('重新判定'));
+  assert.strictEqual(hint({ status: 'done' }), '');
 });
