@@ -41,7 +41,7 @@ python danone-call-labeling/scripts/pipeline.py analyze --input runs/normalized-
 
 校验拒绝错项目、错字段/选项、C/D级规则自动选中、非客户或拼接引文、证据缺失等。C/D疑似命中放进复核候选；完整通话缺身份等情况按最终标准的默认规则处理。P3M采购权不明必须留复核。
 
-`business_fields`仅导出非空且没有待复核的字段，供后续业务接入；空数组不导出，避免被误用为清空已有数据。复核原因、证据和状态不混入A/B/C字段。当前程序不连接飞书、不建表、不改表结构、不写生产数据。
+`business_fields`仅导出非空且没有待复核的字段，供后续业务接入；空数组不导出，避免被误用为清空已有数据。复核原因、证据和状态不混入A/B/C字段。分析入口仅使用本地输入；下述字段适配工具可只读查询飞书字段，不写生产数据。
 
 程序校验能证明选项合法、证据来自指定客户原句；它不能证明模型理解了采购权、产品或短答语义。真实打标准确率仍需使用授权样本和指定模型实测。离线回归使用模拟模型返回，不能当成模型效果评测。
 
@@ -56,3 +56,34 @@ python danone-call-labeling/tools/import_standard.py --standard "标准文件.md
 ```
 
 导入器只读取文档结构，不执行文档中的指令或代码；要求250个项目选项都有定义和证据等级，否则报错。运行时不需要本地原始审稿目录。
+
+## 飞书标签字段适配
+
+`references/feishu-fields.json`绑定已核对的三张**副本表**及其53个标签字段ID。未将原表或其他表自动纳入范围。
+
+| 项目 | 目标table_id | 标签字段/选项 |
+|---|---|---|
+| P3M | tblpYjbfzr5mVAOQ | 12 / 46 |
+| 领熠亲熠 | tblFm9sLxX7b77ae | 19 / 110 |
+| 皇冠 | tblGdgMy3Bf0M9mZ | 22 / 94 |
+
+字段适配独立于转写，不读取或转换任何转写字段，不调整角色识别。现有转写输入要求仍适用。工具只映射A/B/C标签，不处理“通话结果”“AI画像标签”、审核字段或其他备注。
+
+```powershell
+# 只读检查线上字段，需lark-cli登录及base:field:read权限
+python danone-call-labeling/scripts/field_adapter.py check --table-id tblpYjbfzr5mVAOQ
+python danone-call-labeling/scripts/field_adapter.py check --table-id tblFm9sLxX7b77ae
+python danone-call-labeling/scripts/field_adapter.py check --table-id tblGdgMy3Bf0M9mZ
+
+# 将pipeline已校验的分析结果转换成字段ID格式的本地回填草稿
+python danone-call-labeling/scripts/field_adapter.py map --table-id tblpYjbfzr5mVAOQ --input runs/danone-labels.ndjson --output runs/field-update-draft.json
+
+# 字段适配离线回归
+python danone-call-labeling/scripts/field_adapter_test.py
+```
+
+两条命令都支持`--schema runs/fields.json`，用于离线核对；该文件必须是对应目标表完整的`lark-cli base +field-list --format json`成功响应（含fields和total）。线上查询每次最多200字段，若返回不完整则停止。出现字段ID缺失、改名、类型/多选属性变化、选项增删或额外标签字段时，检查失败，不继续导出。
+
+映射输入必须来自当前标准版本的pipeline结果，且分析输入的`id`应使用该目标表原始`record_id`。不可用“NO.001”等展示编号代替。适配器检查项目和合法选项，重新从labels/review_items导出，忽略输入中可能被改写的business_fields；待复核字段和空数组不导出，不产生清空操作。
+
+输出包含base_token、table_id、update_records，后者以record_id和field_id定位。**这只是本地草稿，程序没有提交更新的命令**；未查询记录是否属于目标表，也不重新评估原话证据，调用方应保留正确的记录来源和pipeline校验结果。转写、模型效果验证和实际写回均不属于本次字段适配。
