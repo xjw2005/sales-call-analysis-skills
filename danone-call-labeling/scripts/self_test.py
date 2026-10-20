@@ -175,6 +175,17 @@ class Tests(unittest.TestCase):
             self.assertNotIn("PRIVATE_CUSTOMER_QUOTE", json.dumps(exported))
             self.assertEqual(exported["projects"]["crown"]["A1 联系人身份"]["options"][0]["rule_tier"], "D")
 
+    def test_channel_specialist_role_is_accepted_but_not_customer_evidence(self):
+        record = p.normalize({"id": "synthetic-channel", "project": "p3m", "transcript_complete": True,
+            "transcript": "[00:00.000–00:02.000] 渠道专员：您是店员吗？\n[00:02.000–00:03.000] 客户：我是店员。"})
+        self.assertEqual(record["utterances"][0]["role"], "渠道专员")
+        result = {"project": "p3m", "labels": {"A1 联系人身份": ["店员"]},
+            "evidence": [{"field": "A1 联系人身份", "option": "店员", "utterance_id": "U0001",
+                          "quote": "店员", "product": "不适用", "time_scope": "本次通话", "context_ids": []}],
+            "review_items": []}
+        with self.assertRaises(ValueError):
+            p.validate_result(record, result, ["A1 联系人身份"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

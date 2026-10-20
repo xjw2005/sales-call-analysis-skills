@@ -19,6 +19,7 @@ from build_role_profile import (
     role_hint,
     term_score,
     utterances_from,
+    evidence_scores,
 )
 
 
@@ -32,6 +33,7 @@ def main() -> int:
     parser.add_argument("--role-map", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--window-ms", type=int, default=300000)
+    parser.add_argument("--scenario", choices=("generic", "telesales"), default="generic")
     args = parser.parse_args()
 
     source = json.loads(args.input.read_text(encoding="utf-8"))
@@ -48,9 +50,7 @@ def main() -> int:
         assigned = role_at(item["speaker"], item["start"], default, segments, fallback)
         enriched = {
             **item,
-            "sales": term_score(item["text"], SALES_TERMS),
-            "customer": term_score(item["text"], CUSTOMER_TERMS),
-            "bystander": term_score(item["text"], BYSTANDER_TERMS),
+            **evidence_scores(item["text"], args.scenario),
         }
         grouped[(item["speaker"], item["start"] // window_ms, assigned)].append(enriched)
 

@@ -13,3 +13,9 @@ __pycache__/
 *.flac
 *.pcm
 *.raw
+
+# 新增项目配置和私密模型配置只留本地；现有已跟踪配置保持原状
+config.*.local.json
+role-llm.local.json
+credentials*.json
+*.local.json.lock

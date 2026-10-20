@@ -33,6 +33,32 @@ BYSTANDER_TERMS = (
     "妈妈", "阿姨", "小孩", "宝宝", "把鞋子脱", "收款", "玩去吧", "好好吃饭",
 )
 BOUNDARY_RE = re.compile(r"正在接通|请稍候|喂你好|拜拜|挂了|打个电话|接个电话")
+TELESALES_SALES_TERMS = (
+    "我是爱他美", "渠道专员", "给您回访", "给您做个回访", "来电主要",
+    "这边帮您登记", "帮您申请", "帮您反馈", "您是老板吗", "您是店长吗",
+    "您知道", "您清楚", "您这边", "咱们门店", "您门店", "需要多少",
+    "给您介绍", "给你介绍", "我给您发", "我给你发", "给您安排",
+)
+TELESALES_CUSTOMER_TERMS = (
+    "我是店员", "我是店长", "我是老板", "老板不在", "店长不在", "我负责",
+    "我们门店", "我店里", "我们店", "我们家", "不知道这个政策", "没听说",
+    "还没收到", "没有配额", "配额不够", "需要配额", "不会操作", "卖不动",
+    "没有业务员", "没人来", "你们销售", "你们业务员", "你们政策",
+    "你们平台", "你们公司", "你们的产品", "不想进货", "不卖这个", "已经关店",
+)
+TELESALES_BYSTANDER_TERMS = ("正在接通", "请稍候", "您拨打的", "暂时无法接通", "嘟嘟")
+
+
+def evidence_scores(text: str, scenario: str = "generic") -> dict[str, int]:
+    # 场景词仅用于挑选画像和提示冲突，不直接确定业务身份。
+    terms = (
+        (TELESALES_SALES_TERMS, TELESALES_CUSTOMER_TERMS, TELESALES_BYSTANDER_TERMS)
+        if scenario == "telesales"
+        else (SALES_TERMS, CUSTOMER_TERMS, BYSTANDER_TERMS)
+    )
+    return {name: term_score(text, items) for name, items in zip(("sales", "customer", "bystander"), terms)}
+
+
 INLINE_SPEAKER = re.compile(r"\[spk(\d+)\]\[(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\]")
 
 
@@ -198,6 +224,7 @@ def main() -> int:
     parser.add_argument("--max-samples", type=int, default=8)
     parser.add_argument("--max-chars", type=int, default=10000)
     parser.add_argument("--window-ms", type=int, default=300000)
+    parser.add_argument("--scenario", choices=("generic", "telesales"), default="generic")
     args = parser.parse_args()
 
     payload = json.loads(args.input.read_text(encoding="utf-8"))
@@ -211,9 +238,8 @@ def main() -> int:
             text = segment["text"]
             start, end = segment["start"], segment["end"]
             speaker = segment["speaker"]
-            sales = term_score(text, SALES_TERMS)
-            customer = term_score(text, CUSTOMER_TERMS)
-            bystander = term_score(text, BYSTANDER_TERMS)
+            scores = evidence_scores(text, args.scenario)
+            sales, customer, bystander = (scores[key] for key in ("sales", "customer", "bystander"))
             grouped[speaker].append({
                 "text": text,
                 "start": start,
@@ -234,6 +260,7 @@ def main() -> int:
         "",
         f"- utterances: {sum(len(items) for items in grouped.values())}",
         f"- speakers: {len(grouped)}",
+        f"- scenario: {args.scenario}",
         "",
     ]
     sections.extend(temporal_drift_sections(grouped, max(60000, args.window_ms)))

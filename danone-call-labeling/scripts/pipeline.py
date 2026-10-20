@@ -13,8 +13,8 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = json.loads((ROOT / "references/projects.json").read_text(encoding="utf-8"))
 COMMON = (ROOT / "references/common.md").read_text(encoding="utf-8")
-ROLES = {"客户", "销售", "坐席", "旁人"}
-LINE = re.compile(r"^\s*\[([^\]]+)\]\s*(销售|客户|坐席|旁人)\s*[：:]\s*(.+)$")
+ROLES = {"客户", "销售", "坐席", "渠道专员", "旁人"}
+LINE = re.compile(r"^\s*\[([^\]]+)\]\s*(销售|客户|坐席|渠道专员|旁人)\s*[：:]\s*(.+)$")
 
 
 def fields_for(project):
