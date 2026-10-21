@@ -200,6 +200,7 @@ def validate_schema(profile: dict[str, Any]) -> None:
         "base", "+field-list",
         "--base-token", profile["base_token"],
         "--table-id", profile["table_id"],
+        "--limit", "200",
     )
     fields = {item["name"]: item for item in data.get("fields", [])}
     required = {

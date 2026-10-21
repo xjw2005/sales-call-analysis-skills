@@ -12,6 +12,8 @@ ACTIVE = {'submitted', 'pending', 'running', 'submit_uncertain', 'asr_uncertain'
 
 def cli(profile, action, *args):
     from pipeline import resolve_lark
+    if action == '+field-list' and '--limit' not in args:
+        args = (*args, '--limit', '200')
     cmd = [resolve_lark(), 'base', action, '--base-token', profile['base_token'], '--table-id', profile['table_id'], *args, '--as', 'user', '--format', 'json']
     for attempt in range(3):
         proc = subprocess.run(cmd, capture_output=True, text=True)

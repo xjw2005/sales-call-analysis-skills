@@ -87,3 +87,7 @@ python danone-call-labeling/scripts/field_adapter_test.py
 映射输入必须来自当前标准版本的pipeline结果，且分析输入的`id`应使用该目标表原始`record_id`。不可用“NO.001”等展示编号代替。适配器检查项目和合法选项，重新从labels/review_items导出，忽略输入中可能被改写的business_fields；待复核字段和空数组不导出，不产生清空操作。
 
 输出包含base_token、table_id、update_records，后者以record_id和field_id定位。**这只是本地草稿，程序没有提交更新的命令**；未查询记录是否属于目标表，也不重新评估原话证据，调用方应保留正确的记录来源和pipeline校验结果。转写、模型效果验证和实际写回均不属于本次字段适配。
+
+## 可筛选的复核展示
+
+新增 [Skill入口](SKILL.md) 和 [四列复核布局](references/review-layout.md)：每个业务标签后依次为单选判断状态、多选复核原因和简洁原话依据。`scripts/review_layout.py` 可基于已保存结果导出schema、视图顺序及更新草稿，不重新调用模型、不写飞书；导出时重新校验原话、时间戳、项目和字段配置。
