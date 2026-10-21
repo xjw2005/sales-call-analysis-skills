@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "base_token": "VGpPb7vToafB5As1YnvcVzCdnPf",
+  "tables": {
+    "tblpYjbfzr5mVAOQ": {
+      "project": "p3m",
+      "fields": {
+        "B5 建议诉求": "fldGobQT0Y",
+        "B3 业务服务问题": "fldJd55okT",
+        "B4 工具与流程问题": "fldPhK6AfI",
+        "A2 是否本人决策": "fldwLRHhwJ",
+        "B2 货源与配额": "fldICzmT95",
+        "A4 SPC未操作原因": "fldemwB1y4",
+        "A1 联系人身份": "fldHkcFHzc",
+        "A3 SPC福利知晓度": "fld7AjrO3x",
+        "A10 业务服务意向": "fldauz96XK",
+        "B1 价格与利润": "fldP3Zpllg",
+        "A12 态度信号": "flds51NWlM",
+        "A6 动销状态": "fldRssLUhr"
+      }
+    },
+    "tblFm9sLxX7b77ae": {
+      "project": "lyqy",
+      "fields": {
+        "A1 联系人身份": "fldYsGq9F4",
+        "B3 业务服务问题": "fldXjKBJUB",
+        "B2 货源与配额": "fldp5bbr7G",
+        "A3 SPC福利知晓度": "fldnEe9pE3",
+        "B5 建议诉求": "fldbs7aGw6",
+        "C5 亲熠-进货意向": "fld1PrGeSg",
+        "C1 领熠-在售状态": "fld6s8p2sx",
+        "C3 领熠-卡点": "fldUfYEILB",
+        "C6 亲熠-卡点": "fldKymXspo",
+        "B1 价格与利润": "fldwQkYyZt",
+        "C4 亲熠-知晓与在售": "fldrKE9sad",
+        "A6 动销状态": "fldxKnKkbH",
+        "A4 SPC未操作原因": "fld9ADm2cT",
+        "A2 是否本人决策": "fldPNVmFHT",
+        "C10 渠道与竞品": "fldpjFbbVR",
+        "A12 态度信号": "fldRcmJ3HQ",
+        "C2 领熠-进货意向": "fldFIu0VPi",
+        "A10 业务服务意向": "fldrJCbXHG",
+        "B4 工具与流程问题": "fldM6o7P3x"
+      }
+    },
+    "tblGdgMy3Bf0M9mZ": {
+      "project": "crown",
+      "fields": {
+        "A8 卓跃店晋升要求知晓": "fld7boLs29",
+        "C9 卓傲-卡点": "fldB5t5lxh",
+        "C5 亲熠-进货意向": "fld9UWjNVK",
+        "C7 卓傲-在售状态": "fldewFxMmU",
+        "C1 领熠-在售状态": "fldOvgv16s",
+        "B3 业务服务问题": "fldg9eNHjJ",
+        "C4 亲熠-知晓与在售": "fld0twodB5",
+        "A9 会员日券需求": "fldLkcgJjA",
+        "A5 皇冠店政策-星级专属补贴": "fldhjiG0nB",
+        "A7 皇冠店政策-专属陈列与配额优先供应": "fldMCj3uNi",
+        "C2 领熠-进货意向": "fldgDplTq3",
+        "C3 领熠-卡点": "fld5RM2Fud",
+        "B5 建议诉求": "fld7yOE3pP",
+        "A6 皇冠店政策-会员日优惠券": "fldXdLi0xB",
+        "A10 业务服务意向": "fldfmdEXXC",
+        "A11 物料需求": "fldsymJZTM",
+        "A12 态度信号": "fld3OXlMJ4",
+        "B2 货源与配额": "fldFOUpzC4",
+        "B4 工具与流程问题": "fldl7khSy8",
+        "A2 是否本人决策": "fldS0nhNCR",
+        "A1 联系人身份": "fldl4HjX4l",
+        "C8 卓傲-进货意向": "fldbDD7XNJ"
+      }
+    }
+  }
+}

@@ -1,0 +1,125 @@
+{
+  "asr_provider": "volc_las",
+  "lasutil_path": "",
+  "operator_id": "las_asr_seed-2-0-lite",
+  "operator_version": "v1",
+  "region": "cn-beijing",
+  "rate_yuan_per_hour": 1.6,
+  "tencent_flash": {
+    "app_id": "",
+    "engine_type": "16k_zh-PY",
+    "rate_yuan_per_hour": 3.1,
+    "max_concurrency": 5,
+    "timeout_seconds": 300,
+    "normalize_audio": true,
+    "speaker_diarization": 1,
+    "require_two_speakers": false,
+    "filter_dirty": 0,
+    "filter_modal": 0,
+    "filter_punc": 0,
+    "convert_num_mode": 1,
+    "word_info": 0,
+    "first_channel_only": 1,
+    "hotword_weight": 10
+  },
+  "role_llm_config_path": "role-llm.local.json",
+  "hotwords": [
+    "爱他美",
+    "达能",
+    "领熠",
+    "亲熠",
+    "卓傲",
+    "达e购",
+    "SPC",
+    "皇冠店"
+  ],
+  "profiles": {
+    "p3m": {
+      "base_token": "",
+      "table_id": "",
+      "view_id": "",
+      "attachment_field": "录音附件",
+      "transcript_field": "录音转写",
+      "transcript_field_id": "",
+      "identity_fields": [
+        "通话编号",
+        "外呼项目"
+      ],
+      "hotword_fields": [
+        "门店名称"
+      ],
+      "valid_field": "",
+      "valid_min_seconds": 0,
+      "duration_field": "通话时长（秒）",
+      "duration_field_id": "",
+      "duration_display_field": "通话时长",
+      "duration_display_field_id": "",
+      "status_field": "转写状态",
+      "status_field_id": ""
+    },
+    "lyqy": {
+      "base_token": "",
+      "table_id": "",
+      "view_id": "",
+      "attachment_field": "录音附件",
+      "transcript_field": "录音转写",
+      "transcript_field_id": "",
+      "identity_fields": [
+        "通话编号",
+        "外呼项目"
+      ],
+      "hotword_fields": [
+        "门店名称"
+      ],
+      "valid_field": "",
+      "valid_min_seconds": 0,
+      "duration_field": "通话时长（秒）",
+      "duration_field_id": "",
+      "duration_display_field": "通话时长",
+      "duration_display_field_id": "",
+      "status_field": "转写状态",
+      "status_field_id": ""
+    },
+    "crown": {
+      "base_token": "",
+      "table_id": "",
+      "view_id": "",
+      "attachment_field": "录音文件",
+      "transcript_field": "录音转写",
+      "transcript_field_id": "",
+      "identity_fields": [
+        "编号",
+        "回访类型"
+      ],
+      "hotword_fields": [
+        "门店名称"
+      ],
+      "valid_field": "",
+      "valid_min_seconds": 0,
+      "duration_field": "通话时长（秒）",
+      "duration_field_id": "",
+      "duration_display_field": "通话时长",
+      "duration_display_field_id": "",
+      "status_field": "转写状态",
+      "status_field_id": ""
+    }
+  },
+  "scenario": "telesales",
+  "punctuation_only": true,
+  "role_display_names": {
+    "销售": "渠道专员"
+  },
+  "las_min_request_interval": 1.0,
+  "asr_request": {
+    "enable_itn": true,
+    "enable_punc": true,
+    "enable_ddc": false,
+    "enable_speaker_info": true,
+    "show_utterances": true,
+    "show_speech_rate": false,
+    "show_volume": false,
+    "enable_emotion_detection": false,
+    "enable_gender_detection": false
+  },
+  "record_hotwords": {}
+}

@@ -33,8 +33,9 @@ if hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parent.parent
 RUNS = ROOT / "runs"
 CONFIG = ROOT / "config.local.json"
+PREPARED_RUN_DIR: Path | None = None
 DIALECT_PROMPT = ROOT / "references" / "dialect-to-mandarin.md"
-ROLE_SKILL = Path(r"C:\Users\12909\.codex\skills\classify-sales-call-roles")
+ROLE_SKILL = Path(os.environ.get("CLASSIFY_ROLE_SKILL_PATH", str(ROOT.parent / "classify-sales-call-roles")))
 ROLE_BUILD = ROLE_SKILL / "scripts" / "build_role_profile.py"
 ROLE_APPLY = ROLE_SKILL / "scripts" / "apply_role_map.py"
 ROLE_AUDIT = ROLE_SKILL / "scripts" / "audit_role_map.py"
@@ -48,7 +49,7 @@ INLINE_SPEAKER = re.compile(r"\[spk(\d+)\]\[(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\]")
 LINE_RE = re.compile(
     r"^\[(?P<start>\d\d:\d\d(?:\:\d\d)?\.\d{3})–"
     r"(?P<end>\d\d:\d\d(?:\:\d\d)?\.\d{3})\] "
-    r"(?P<role>销售|客户|旁人)：(?P<text>.+)$"
+    r"(?P<role>销售|渠道专员|客户|旁人)：(?P<text>.+)$"
 )
 STATE_LOCK = threading.Lock()
 
@@ -71,7 +72,11 @@ def load_json(path: Path) -> dict[str, Any]:
 def load_config() -> dict[str, Any]:
     if not CONFIG.exists():
         raise RuntimeError(f"缺少配置文件: {CONFIG}")
-    return load_json(CONFIG)
+    cfg = load_json(CONFIG)
+    linked = cfg.get("role_llm_config_path")
+    if linked and not Path(linked).is_absolute():
+        cfg["role_llm_config_path"] = str((CONFIG.parent / linked).resolve())
+    return cfg
 
 
 def merged_linked_config(path: Path, seen: set[Path] | None = None) -> dict[str, Any]:
@@ -195,12 +200,14 @@ def validate_schema(profile: dict[str, Any]) -> None:
         "base", "+field-list",
         "--base-token", profile["base_token"],
         "--table-id", profile["table_id"],
+        "--limit", "200",
     )
     fields = {item["name"]: item for item in data.get("fields", [])}
     required = {
         profile["attachment_field"],
         profile["transcript_field"],
         *profile.get("identity_fields", []),
+        *profile.get("hotword_fields", []),
     }
     missing = sorted(required - set(fields))
     if missing:
@@ -229,6 +236,7 @@ def fetch_rows(
         profile["attachment_field"],
         profile["transcript_field"],
         *profile.get("identity_fields", []),
+        *profile.get("hotword_fields", []),
     ]
     if profile.get("valid_field"):
         names.append(profile["valid_field"])
@@ -502,6 +510,8 @@ def prepare(
     selected, stats = pending_rows(rows, profile, overwrite, record_ids)
     run_dir = RUNS / datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=False)
+    global PREPARED_RUN_DIR
+    PREPARED_RUN_DIR = run_dir
     state: dict[str, Any] = {
         "schema_version": 1,
         "created_at": now(),
@@ -513,6 +523,13 @@ def prepare(
         "asr_provider": provider,
         "operator_id": cfg["operator_id"],
         "operator_version": cfg["operator_version"],
+        "asr_request": cfg.get("asr_request", {}),
+        "estimated_yuan_scope": "base_asr_only",
+        "cost_notice": (
+            "时长估价仅含基础ASR；本算子默认精修及DeepSeek角色分析另计"
+            if cfg.get("operator_id") == "las_asr_seed-2-0-lite"
+            else "时长估价仅含ASR；DeepSeek角色分析另计"
+        ),
         "region": cfg.get("region", "cn-beijing"),
         "asr_language": asr_language,
         "output_language": output_language,
@@ -526,7 +543,11 @@ def prepare(
     def job(row: dict[str, Any]) -> dict[str, Any]:
         rid = row["_record_id"]
         try:
-            return download_attachment(profile, row, run_dir / "records" / rid)
+            record = download_attachment(profile, row, run_dir / "records" / rid)
+            record["hotword_context"] = {
+                field: row.get(field) for field in profile.get("hotword_fields", [])
+            }
+            return record
         except Exception as exc:
             return {
                 "record_id": rid,
@@ -562,21 +583,35 @@ def las_bin(cfg: dict[str, Any]) -> str:
     return str(value)
 
 
+_LAS_RATE_LOCK = threading.Lock()
+_LAS_LAST_REQUEST = 0.0
+
+
 def las_command(cfg: dict[str, Any], *args: str) -> dict[str, Any]:
     if not os.environ.get("LAS_API_KEY"):
         raise RuntimeError("缺少 LAS_API_KEY 环境变量")
     env = os.environ.copy()
     env["LAS_REGION"] = str(cfg.get("region", "cn-beijing"))
-    proc = subprocess.run(
-        [las_bin(cfg), *args],
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-    )
-    if proc.returncode:
-        raise RuntimeError(f"lasutil 失败({proc.returncode}): {proc.stderr[:500] or proc.stdout[:500]}")
-    return json_from_output(proc.stdout, "lasutil")
+    global _LAS_LAST_REQUEST
+    for attempt in range(6):
+        with _LAS_RATE_LOCK:
+            delay = float(cfg.get("las_min_request_interval", 1.0)) - (time.monotonic() - _LAS_LAST_REQUEST)
+            if delay > 0:
+                time.sleep(delay)
+            _LAS_LAST_REQUEST = time.monotonic()
+        proc = subprocess.run(
+            [las_bin(cfg), *args], capture_output=True, encoding="utf-8",
+            errors="replace", env=env,
+        )
+        if not proc.returncode:
+            return json_from_output(proc.stdout, "lasutil")
+        error = proc.stderr[:500] or proc.stdout[:500]
+        # Explicit rate rejection is safe to retry; network/unknown Submit errors are not.
+        if "http_status=429" in error and attempt < 5:
+            time.sleep(min(30, 2 ** (attempt + 1)))
+            continue
+        raise RuntimeError(f"lasutil 失败({proc.returncode}): {error}")
+    raise RuntimeError("LAS 限流重试预算耗尽")
 
 
 def deep_find(value: Any, key: str) -> Any:
@@ -641,6 +676,20 @@ def submit_one(cfg: dict[str, Any], record: dict[str, Any], record_dir: Path) ->
                 "enable_denoise": True,
             },
         }
+        # 可配置的原样转写模式；DDC 关闭并不等于关闭另一个算子的精修。
+        payload["request"].update(cfg.get("asr_request", {}))
+        words = list(cfg.get("hotwords", []))
+        for value in record.get("hotword_context", {}).values():
+            if isinstance(value, str) and value.strip():
+                words.append(value.strip())
+        words.extend(cfg.get("record_hotwords", {}).get(record["record_id"], []))
+        words = list(dict.fromkeys(word.strip() for word in words if isinstance(word, str) and word.strip()))
+        if words:
+            payload["request"]["corpus"] = {
+                "context": json.dumps({"hotwords": [{"word": word} for word in words]}, ensure_ascii=False)
+            }
+        if cfg.get("operator_id") == "las_asr_pro":
+            payload["resource"] = str(cfg.get("asr_resource", "seedasr"))
         archived_payload = json.loads(json.dumps(payload, ensure_ascii=False))
         archived_payload["audio"]["url"] = "<ephemeral-presigned-url-redacted>"
         request_path = record_dir / "request.json" if len(files) == 1 else record_dir / f"request-{index + 1}.json"
@@ -1182,6 +1231,7 @@ def run_role_audit(
     result_path: Path,
     role_map_path: Path,
     output_path: Path,
+    scenario: str = "generic",
 ) -> dict[str, Any]:
     subprocess_checked(
         [
@@ -1192,6 +1242,7 @@ def run_role_audit(
             str(role_map_path),
             "--output",
             str(output_path),
+            "--scenario", scenario,
         ],
         "审计角色映射",
     )
@@ -1221,6 +1272,14 @@ def validate_transcript(path: Path) -> str:
     return text
 
 
+def display_roles(text: str, cfg: dict[str, Any]) -> str:
+    """只映射行首角色标签，不替换发言正文中的职业称谓。"""
+    names = cfg.get("role_display_names", {})
+    if names.get("销售") == "渠道专员":
+        return re.sub(r"^(\[[^\]\n]+\] )销售：", r"\1渠道专员：", text, flags=re.MULTILINE)
+    return text
+
+
 def label_roles(
     cfg: dict[str, Any],
     record_dir: Path,
@@ -1230,8 +1289,12 @@ def label_roles(
     role_map_path = record_dir / "role-map.json"
     role_audit_path = record_dir / "role-audit.json"
     transcript_path = record_dir / "labeled-transcript.txt"
+    scenario = str(cfg.get("scenario", "generic"))
+    role_prompt = ROLE_PROMPT.read_text(encoding="utf-8")
+    if scenario == "telesales":
+        role_prompt += "\n\n" + (ROLE_SKILL / "references/telesales-context.md").read_text(encoding="utf-8")
     subprocess_checked(
-        [sys.executable, str(ROLE_BUILD), str(result_path), "--output", str(profile_path)],
+        [sys.executable, str(ROLE_BUILD), str(result_path), "--output", str(profile_path), "--scenario", scenario],
         "生成 speaker 画像",
     )
     profile_text = profile_path.read_text(encoding="utf-8")
@@ -1240,11 +1303,13 @@ def label_roles(
     try:
         raw = llm_call(
             cfg,
-            ROLE_PROMPT.read_text(encoding="utf-8"),
+            role_prompt,
             "请根据以下 speaker 画像输出 role-map JSON：\n\n" + profile_text,
         )
         role_map = validate_role_map(extract_json_object(raw), speakers)
     except Exception as exc:
+        if scenario == "telesales":
+            raise RuntimeError("电销角色判断失败，需复核或重试角色层；不按关键词强制分配销售和客户") from exc
         source = f"deterministic_fallback:{type(exc).__name__}"
         role_map = validate_role_map(fallback_role_map(speakers, profile_text), speakers)
     atomic_json(record_dir / "role-map.initial.json", role_map)
@@ -1258,13 +1323,13 @@ def label_roles(
             if repair_attempt == 0
             else f"role-audit.repair-{repair_attempt}.json"
         )
-        current_audit = run_role_audit(result_path, role_map_path, audit_candidate_path)
+        current_audit = run_role_audit(result_path, role_map_path, audit_candidate_path, scenario)
         if not current_audit.get("summary", {}).get("needs_repair"):
             break
         try:
             repair_raw = llm_call(
                 cfg,
-                ROLE_PROMPT.read_text(encoding="utf-8"),
+                role_prompt,
                 (
                     "请修正当前 role-map，只处理审计指出的连续高置信冲突。"
                     "输出完整 role-map JSON。\n\n"
@@ -1282,7 +1347,7 @@ def label_roles(
         repaired_map_path = record_dir / f"role-map.repair-{repair_attempt + 1}.json"
         atomic_json(repaired_map_path, repaired)
         repaired_audit_path = record_dir / f"role-audit.repair-{repair_attempt + 1}.json"
-        repaired_audit = run_role_audit(result_path, repaired_map_path, repaired_audit_path)
+        repaired_audit = run_role_audit(result_path, repaired_map_path, repaired_audit_path, scenario)
         before = int(current_audit.get("summary", {}).get("conflict_windows") or 0)
         after = int(repaired_audit.get("summary", {}).get("conflict_windows") or 0)
         if after >= before:
@@ -1295,7 +1360,9 @@ def label_roles(
         raise RuntimeError("角色映射审计没有生成结果")
     atomic_json(role_map_path, current_map)
     atomic_json(role_audit_path, current_audit)
-    if current_audit.get("summary", {}).get("severe"):
+    if current_audit.get("summary", {}).get("severe") or (
+        scenario == "telesales" and current_audit.get("summary", {}).get("needs_repair")
+    ):
         raise ValueError(
             "角色映射审计仍有严重语义冲突，已停止写回；"
             f"conflict_windows={current_audit.get('summary', {}).get('conflict_windows')}"
@@ -1308,6 +1375,11 @@ def label_roles(
         ],
         "应用角色映射",
     )
+    text = validate_transcript(transcript_path)
+    displayed = display_roles(text, cfg)
+    if displayed != text:
+        (record_dir / "labeled-transcript.internal-roles.txt").write_text(text, encoding="utf-8")
+        transcript_path.write_text(displayed, encoding="utf-8")
     return validate_transcript(transcript_path), source, current_audit.get("summary", {})
 
 
@@ -1403,7 +1475,15 @@ def judge_validity(
     if _VALIDITY_PROMPT_TEXT is None:
         _VALIDITY_PROMPT_TEXT = VALIDITY_PROMPT.read_text(encoding="utf-8")
     try:
-        raw = llm_call(cfg, _VALIDITY_PROMPT_TEXT, user)
+        validity_prompt = _VALIDITY_PROMPT_TEXT
+        if cfg.get("scenario") == "telesales":
+            validity_prompt += (
+                "\n\n当前为门店电销回访/调研。店员接听也属于客户；拒绝进货、关店、"
+                "缺配额、不知晓政策、不会操作等简短反馈可以有效。角色未确认的片段"
+                "不能直接视为背景噪音，不能据此直接判无效；需要人工核验身份。"
+                "电销说过政策不等于客户原本知晓，提问不等于客户承认对应事实。"
+            )
+        raw = llm_call(cfg, validity_prompt, user)
         verdict = extract_json_object(raw)
         value = verdict.get("result")
         if value not in {"有效", "内容无效"}:
@@ -1414,6 +1494,8 @@ def judge_validity(
             "source": "llm",
         }
     except Exception as exc:
+        if cfg.get("scenario") == "telesales":
+            raise RuntimeError("电销有效性模型判断失败，保持原字段并转人工复核") from exc
         return {"value": "内容无效", "reason": f"模型判断失败: {exc}", "source": "model_error"}
 
 
@@ -1487,6 +1569,9 @@ def process_completed(
             cfg, load_json(role_input_path), record_dir
         )
     labeled, source, role_audit = label_roles(cfg, record_dir, role_input_path)
+    if cfg.get("punctuation_only", False):
+        from readability import punctuate
+        labeled = punctuate(cfg, record_dir, labeled, llm_call, extract_json_object)
     result = {
         "status": "role_labeled",
         "completed_at": now(),
@@ -1779,6 +1864,9 @@ def print_summary(state: dict[str, Any], run_dir: Path | None = None) -> None:
         "run_dir": str(run_dir.resolve()) if run_dir else None,
         "duration_seconds": state.get("duration_seconds"),
         "estimated_yuan": state.get("estimated_yuan"),
+        "operator_id": state.get("operator_id"),
+        "estimated_yuan_scope": state.get("estimated_yuan_scope"),
+        "cost_notice": state.get("cost_notice"),
         "status_counts": counts,
     }, ensure_ascii=False, indent=2))
 
